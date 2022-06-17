@@ -44,7 +44,7 @@ func mcsFqToBam(r1File, r2File, outFile, missingBcFile string) {
 
 	o := fileio.EasyCreate(outFile)
 	bw := sam.NewBamWriter(o, sam.GenerateHeader(nil, nil, sam.Unsorted, sam.None))
-
+	fmt.Println(sam.GenerateHeader(nil, nil, sam.Unsorted, sam.None))
 	var noBcFile *fileio.EasyWriter
 	var noBcWriter *sam.BamWriter
 	if missingBcFile != "" {
