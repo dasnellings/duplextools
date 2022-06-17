@@ -9,7 +9,6 @@ import (
 	"github.com/vertgenlab/gonomics/fileio"
 	"github.com/vertgenlab/gonomics/sam"
 	"log"
-	"os"
 )
 
 // SAM format uses ascii offset of 33 to make everything start with individual characters
@@ -45,7 +44,7 @@ func mcsFqToBam(r1File, r2File, outFile, missingBcFile string) {
 
 	o := fileio.EasyCreate(outFile)
 	bw := sam.NewBamWriter(o, sam.GenerateHeader(nil, nil, sam.Unsorted, sam.None))
-	sam.WriteHeaderToFileHandle(os.Stdout, sam.GenerateHeader(nil, nil, sam.Unsorted, sam.None))
+
 	var noBcFile *fileio.EasyWriter
 	var noBcWriter *sam.BamWriter
 	if missingBcFile != "" {
@@ -65,6 +64,7 @@ func mcsFqToBam(r1File, r2File, outFile, missingBcFile string) {
 		bcRev = barcode.Extract(pair.Rev.Seq)
 
 		if bcFor == "*" || bcRev == "*" {
+			fmt.Println("MISSINGPRINT")
 			if noBcFile != nil {
 				fqToSam(&pair.Fwd, &s1, true)
 				fqToSam(&pair.Rev, &s2, false)
@@ -91,8 +91,7 @@ func mcsFqToBam(r1File, r2File, outFile, missingBcFile string) {
 		extra = fmt.Sprintf("AL:Z:%s\tBC:Z:%s\tBF:Z:%s\tBR:Z:%s", bcId, bcFor+"-"+bcRev, bcFor, bcRev)
 		s1.Extra = extra
 		s2.Extra = extra
-		fmt.Println(s1)
-		fmt.Println(s2)
+
 		sam.WriteToBamFileHandle(bw, s1, 0)
 		sam.WriteToBamFileHandle(bw, s2, 0)
 	}
