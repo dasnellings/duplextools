@@ -48,6 +48,8 @@ func mcsFqToBam(r1File, r2File, outFile string) {
 	var s1, s2 sam.Sam
 	s1.RName = "*"
 	s2.RName = "*"
+	s1.RNext = "*"
+	s2.RNext = "*"
 	for pair = range readPairs {
 		fqToSam(&pair.Fwd, &s1, true)
 		fqToSam(&pair.Rev, &s2, false)
