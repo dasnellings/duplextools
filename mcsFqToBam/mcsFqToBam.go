@@ -49,7 +49,7 @@ func mcsFqToBam(r1File, r2File, outFile, missingBcFile string) {
 	var noBcWriter *sam.BamWriter
 	if missingBcFile != "" {
 		noBcFile = fileio.EasyCreate(missingBcFile)
-		noBcWriter = sam.NewBamWriter(o, sam.GenerateHeader(nil, nil, sam.Unsorted, sam.None))
+		noBcWriter = sam.NewBamWriter(noBcWriter, sam.GenerateHeader(nil, nil, sam.Unsorted, sam.None))
 	}
 
 	var pair fastq.PairedEnd
@@ -64,7 +64,6 @@ func mcsFqToBam(r1File, r2File, outFile, missingBcFile string) {
 		bcRev = barcode.Extract(pair.Rev.Seq)
 
 		if bcFor == "*" || bcRev == "*" {
-			fmt.Println("MISSINGPRINT")
 			if noBcFile != nil {
 				fqToSam(&pair.Fwd, &s1, true)
 				fqToSam(&pair.Rev, &s2, false)
@@ -75,7 +74,6 @@ func mcsFqToBam(r1File, r2File, outFile, missingBcFile string) {
 			}
 			continue
 		}
-		fmt.Println("Passed")
 
 		if bcFor > bcRev {
 			bcId = bcFor + "-" + bcRev
