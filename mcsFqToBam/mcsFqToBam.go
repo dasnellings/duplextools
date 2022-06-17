@@ -87,7 +87,7 @@ func mcsFqToBam(r1File, r2File, outFile, missingBcFile string) {
 		fqToSam(&pair.Fwd, &s1, true)
 		fqToSam(&pair.Rev, &s2, false)
 
-		extra = fmt.Sprintf("AL:Z:%s\tBC:Z:%s\tBF:Z:%s\tBR:Z:%s", bcId, bcFor+"-"+bcRev, bcFor, bcRev)
+		//extra = fmt.Sprintf("AL:Z:%s\tBC:Z:%s\tBF:Z:%s\tBR:Z:%s", bcId, bcFor+"-"+bcRev, bcFor, bcRev)
 		s1.Extra = extra
 		s2.Extra = extra
 
