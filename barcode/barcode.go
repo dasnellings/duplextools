@@ -9,13 +9,7 @@ import (
 )
 
 const McsSharedSequence string = "AGATGTGTATAAGAGACAG"
-
-var mcsSharedBases []dna.Base = dna.StringToBases(McsSharedSequence)
-
 const McsSharedSequenceRevComp string = "CTGTCTCTTATACACATCT"
-
-var mcsSharedBasesRevComp []dna.Base = dna.StringToBases(McsSharedSequenceRevComp)
-
 const McsB1 string = "GGCACCGAAAA"
 const McsB2 string = "CTCGGCGATAAA"
 const McsB3 string = "GGTGGAGCATAA"

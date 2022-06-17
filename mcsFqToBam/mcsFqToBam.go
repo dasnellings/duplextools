@@ -62,6 +62,19 @@ func mcsFqToBam(r1File, r2File, outFile, missingBcFile string) {
 	for pair = range readPairs {
 		bcFor = barcode.Extract(pair.Fwd.Seq)
 		bcRev = barcode.Extract(pair.Rev.Seq)
+
+		if bcFor == "*" || bcRev == "*" {
+			if noBcFile != nil {
+				fqToSam(&pair.Fwd, &s1, true)
+				fqToSam(&pair.Rev, &s2, false)
+				s1.Extra = ""
+				s2.Extra = ""
+				sam.WriteToBamFileHandle(noBcWriter, s1, 0)
+				sam.WriteToBamFileHandle(noBcWriter, s2, 0)
+			}
+			continue
+		}
+
 		if bcFor > bcRev {
 			bcId = bcFor + "-" + bcRev
 		} else {
@@ -78,16 +91,8 @@ func mcsFqToBam(r1File, r2File, outFile, missingBcFile string) {
 		s1.Extra = extra
 		s2.Extra = extra
 
-		if bcFor != "*" && bcRev != "*" {
-			sam.WriteToBamFileHandle(bw, s1, 0)
-			sam.WriteToBamFileHandle(bw, s2, 0)
-			continue
-		}
-
-		if noBcFile != nil {
-			sam.WriteToBamFileHandle(noBcWriter, s1, 0)
-			sam.WriteToBamFileHandle(noBcWriter, s2, 0)
-		}
+		sam.WriteToBamFileHandle(bw, s1, 0)
+		sam.WriteToBamFileHandle(bw, s2, 0)
 	}
 
 	err := bw.Close()
