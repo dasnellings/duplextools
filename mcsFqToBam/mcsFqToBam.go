@@ -9,6 +9,7 @@ import (
 	"github.com/vertgenlab/gonomics/fileio"
 	"github.com/vertgenlab/gonomics/sam"
 	"log"
+	"os"
 )
 
 // SAM format uses ascii offset of 33 to make everything start with individual characters
@@ -44,7 +45,7 @@ func mcsFqToBam(r1File, r2File, outFile, missingBcFile string) {
 
 	o := fileio.EasyCreate(outFile)
 	bw := sam.NewBamWriter(o, sam.GenerateHeader(nil, nil, sam.Unsorted, sam.None))
-	fmt.Println(sam.GenerateHeader(nil, nil, sam.Unsorted, sam.None))
+	sam.WriteHeaderToFileHandle(os.Stdout, sam.GenerateHeader(nil, nil, sam.Unsorted, sam.None))
 	var noBcFile *fileio.EasyWriter
 	var noBcWriter *sam.BamWriter
 	if missingBcFile != "" {
