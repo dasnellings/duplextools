@@ -75,6 +75,7 @@ func mcsFqToBam(r1File, r2File, outFile, missingBcFile string) {
 			}
 			continue
 		}
+		fmt.Println("Passed")
 
 		if bcFor > bcRev {
 			bcId = bcFor + "-" + bcRev
