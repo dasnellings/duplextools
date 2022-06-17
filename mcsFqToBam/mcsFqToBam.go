@@ -58,7 +58,6 @@ func mcsFqToBam(r1File, r2File, outFile, missingBcFile string) {
 	s2.RName = "*"
 	s1.RNext = "*"
 	s2.RNext = "*"
-	var bcFound bool
 	var bcFor, bcRev, bcId, extra string
 	for pair = range readPairs {
 		bcFor = barcode.Extract(pair.Fwd.Seq)
@@ -79,7 +78,7 @@ func mcsFqToBam(r1File, r2File, outFile, missingBcFile string) {
 		s1.Extra = extra
 		s2.Extra = extra
 
-		if bcFound {
+		if bcFor != "*" && bcRev != "*" {
 			sam.WriteToBamFileHandle(bw, s1, 0)
 			sam.WriteToBamFileHandle(bw, s2, 0)
 			continue
