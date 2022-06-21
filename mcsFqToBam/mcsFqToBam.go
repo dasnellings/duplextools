@@ -62,6 +62,7 @@ func mcsFqToBam(r1File, r2File, outFile, missingBcFile string) {
 	for pair = range readPairs {
 		bcFor = barcode.Extract(pair.Fwd.Seq)
 		bcRev = barcode.Extract(pair.Rev.Seq)
+		//TODO Fuzzy Extract & trim
 
 		if bcFor == "*" || bcRev == "*" {
 			if noBcFile != nil {
