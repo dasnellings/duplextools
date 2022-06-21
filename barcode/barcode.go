@@ -56,6 +56,11 @@ func Trim(fq *fastq.Fastq) {
 	if templateEnd == -1 {
 		templateEnd = len(s)
 	}
+
+	if templateStart > templateEnd {
+		templateStart = 0
+		templateEnd = 0
+	}
 	fq.Seq = fq.Seq[templateStart:templateEnd]
 	fq.Qual = fq.Qual[templateStart:templateEnd]
 }
