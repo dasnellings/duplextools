@@ -28,28 +28,30 @@ type minimalBed struct {
 }
 
 func getBarcodes(s sam.Sam) (forward, reverse string) {
-	var seq string
-	var idxEnd int
+	//var seq string
+	//var idxEnd int
 	var query any
 	var found bool
 	var err error
 	query, found, err = sam.QueryTag(s, "BF")
 	exception.PanicOnErr(err)
 	if found {
-		seq = query.(string)
-		idxEnd = strings.Index(seq, mcsSharedSequence)
-		if idxEnd > 0 {
-			forward = seq[:idxEnd]
-		}
+		forward = query.(string)
+		//seq = query.(string)
+		//idxEnd = strings.Index(seq, mcsSharedSequence)
+		//if idxEnd > 0 {
+		//	forward = seq[:idxEnd]
+		//}
 	}
 	query, found, err = sam.QueryTag(s, "BR")
 	exception.PanicOnErr(err)
 	if found {
-		seq = query.(string)
-		idxEnd = strings.Index(seq, mcsSharedSequence)
-		if idxEnd > 0 {
-			reverse = seq[:idxEnd]
-		}
+		reverse = query.(string)
+		//seq = query.(string)
+		//idxEnd = strings.Index(seq, mcsSharedSequence)
+		//if idxEnd > 0 {
+		//	reverse = seq[:idxEnd]
+		//}
 	}
 	return
 }
