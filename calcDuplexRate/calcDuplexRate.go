@@ -1,27 +1,36 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"github.com/dasnellings/MCS_MS/barcode"
 	"github.com/vertgenlab/gonomics/sam"
 	"log"
-	"os"
 )
 
+const startTolerance int = 0
+
 func main() {
-	infile := os.Args[1]
-	reads, header := sam.GoReadToChan(infile)
+	tolerance := flag.Int("t", 0, "Deviation from exact start match to be considered same allele. 0 means perfect match.")
+	infile := flag.String("i", "", "Input coordinate sorted BAM or SAM file.")
+	flag.Parse()
+
+	if *infile == "" {
+		log.Fatal("ERROR: must input coordinate sorted BAM or SAM file")
+	}
+	reads, header := sam.GoReadToChan(*infile)
 	if header.Metadata.SortOrder[0] != sam.Coordinate {
 		log.Fatal("ERROR: input file must be coordinate sorted")
 	}
 
+	startTolerance := uint32(*tolerance)
 	var currChrom string
 	var currStart uint32
 	var totalReads, duplexSites, totalSites int
 	var bcFor, bcRev, currBcFor, currBcRev string
 	for r := range reads {
 		totalReads++
-		if (currStart >= r.Pos-5 && currStart <= r.Pos+5) && currChrom == r.RName {
+		if (currStart >= r.Pos-startTolerance && currStart <= r.Pos+startTolerance) && currChrom == r.RName {
 			currBcFor, currBcRev = barcode.Get(r)
 			if currBcFor == bcRev && currBcRev == bcFor {
 				duplexSites++
