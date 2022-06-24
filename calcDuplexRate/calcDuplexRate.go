@@ -35,12 +35,12 @@ func main() {
 			bcFor, bcRev = barcode.Get(r)
 		}
 
-		if totalReads%100000 == 0 {
-			fmt.Printf("Total Reads:\t%d\n", totalReads)
-			fmt.Printf("Total Sites:\t%d\n", totalSites)
-			fmt.Printf("Duplex Sites:\t%d\n", duplexSites)
-			fmt.Printf("Duplex Fraction:\t%f\n", float64(duplexSites)/float64(totalSites))
-		}
+		//if totalReads%100000 == 0 {
+		//	fmt.Printf("Total Reads:\t%d\n", totalReads)
+		//	fmt.Printf("Total Sites:\t%d\n", totalSites)
+		//	fmt.Printf("Duplex Sites:\t%d\n", duplexSites)
+		//	fmt.Printf("Duplex Fraction:\t%f\n\n", float64(duplexSites)/float64(totalSites))
+		//}
 	}
 
 	fmt.Printf("Total Reads:\t%d\n", totalReads)
