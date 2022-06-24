@@ -16,6 +16,7 @@ func main() {
 	flag.Parse()
 
 	if *infile == "" {
+		flag.PrintDefaults()
 		log.Fatal("ERROR: must input coordinate sorted BAM or SAM file")
 	}
 	reads, header := sam.GoReadToChan(*infile)
@@ -52,8 +53,8 @@ func main() {
 		//}
 	}
 
-	fmt.Printf("Total Reads:\t%d\n", totalReads)
-	fmt.Printf("Total Sites:\t%d\n", totalSites)
-	fmt.Printf("Duplex Sites:\t%d\n", duplexSites)
+	fmt.Printf("Total Reads:\t\t%d\n", totalReads)
+	fmt.Printf("Total Sites:\t\t%d\n", totalSites)
+	fmt.Printf("Duplex Sites:\t\t%d\n", duplexSites)
 	fmt.Printf("Duplex Fraction:\t%f\n", float64(duplexSites)/float64(totalSites))
 }
