@@ -21,7 +21,7 @@ func main() {
 	var bcFor, bcRev, currBcFor, currBcRev string
 	for r := range reads {
 		totalReads++
-		if currStart == r.Pos && currChrom == r.RName {
+		if (currStart >= r.Pos-5 && currStart <= r.Pos+5) && currChrom == r.RName {
 			currBcFor, currBcRev = barcode.Get(r)
 			if currBcFor == bcRev && currBcRev == bcFor {
 				duplexSites++
