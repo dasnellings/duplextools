@@ -2,8 +2,10 @@ package barcode
 
 import (
 	"github.com/vertgenlab/gonomics/dna"
+	"github.com/vertgenlab/gonomics/exception"
 	"github.com/vertgenlab/gonomics/fastq"
 	"github.com/vertgenlab/gonomics/numbers"
+	"github.com/vertgenlab/gonomics/sam"
 	"log"
 	"strings"
 )
@@ -44,6 +46,35 @@ var Barcodes map[string]bool = map[string]bool{
 	McsB14: true,
 	McsB15: true,
 	McsB16: true,
+}
+
+func Get(s sam.Sam) (forward, reverse string) {
+	//var seq string
+	//var idxEnd int
+	var query any
+	var found bool
+	var err error
+	query, found, err = sam.QueryTag(s, "BF")
+	exception.PanicOnErr(err)
+	if found {
+		forward = query.(string)
+		//seq = query.(string)
+		//idxEnd = strings.Index(seq, mcsSharedSequence)
+		//if idxEnd > 0 {
+		//	forward = seq[:idxEnd]
+		//}
+	}
+	query, found, err = sam.QueryTag(s, "BR")
+	exception.PanicOnErr(err)
+	if found {
+		reverse = query.(string)
+		//seq = query.(string)
+		//idxEnd = strings.Index(seq, mcsSharedSequence)
+		//if idxEnd > 0 {
+		//	reverse = seq[:idxEnd]
+		//}
+	}
+	return
 }
 
 func Trim(fq *fastq.Fastq) {

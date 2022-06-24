@@ -3,9 +3,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/dasnellings/MCS_MS/barcode"
 	"github.com/vertgenlab/gonomics/bed"
 	"github.com/vertgenlab/gonomics/dna"
-	"github.com/vertgenlab/gonomics/exception"
 	"github.com/vertgenlab/gonomics/interval"
 	"github.com/vertgenlab/gonomics/sam"
 	"log"
@@ -25,35 +25,6 @@ type minimalBed struct {
 	start int
 	end   int
 	name  string
-}
-
-func getBarcodes(s sam.Sam) (forward, reverse string) {
-	//var seq string
-	//var idxEnd int
-	var query any
-	var found bool
-	var err error
-	query, found, err = sam.QueryTag(s, "BF")
-	exception.PanicOnErr(err)
-	if found {
-		forward = query.(string)
-		//seq = query.(string)
-		//idxEnd = strings.Index(seq, mcsSharedSequence)
-		//if idxEnd > 0 {
-		//	forward = seq[:idxEnd]
-		//}
-	}
-	query, found, err = sam.QueryTag(s, "BR")
-	exception.PanicOnErr(err)
-	if found {
-		reverse = query.(string)
-		//seq = query.(string)
-		//idxEnd = strings.Index(seq, mcsSharedSequence)
-		//if idxEnd > 0 {
-		//	reverse = seq[:idxEnd]
-		//}
-	}
-	return
 }
 
 func getLongestRepeat(seq []dna.Base, repeatUnit []dna.Base) int {
@@ -84,7 +55,7 @@ func getMinimalRead(s sam.Sam, mb minimalBed) minimalRead {
 	var repeatUnit string
 	words := strings.Split(mb.name, "x")
 	repeatUnit = words[1]
-	mr.forBarcode, mr.revBarcode = getBarcodes(s)
+	mr.forBarcode, mr.revBarcode = barcode.Get(s)
 	mr.maxRepeat = getLongestRepeat(s.Seq, dna.StringToBases(repeatUnit))
 	return mr
 }
