@@ -25,7 +25,7 @@ func main() {
 		log.Fatal("ERROR: input file must be coordinate sorted")
 	}
 	updateFreq := *update
-	var chunkStartChrom, chunkEndChrom string = "chr1", "chr1"
+	var chunkStartChrom, chunkEndChrom string
 	var chunkTotalSites, chunkDuplexSites int
 	var chunkStart, chunkEnd uint32
 	if updateFreq > 0 {
