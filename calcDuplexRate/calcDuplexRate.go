@@ -8,6 +8,13 @@ import (
 	"log"
 )
 
+type output struct {
+	chrom    string
+	totReads int
+	totSites int
+	dupSites int
+}
+
 const startTolerance int = 0
 
 func main() {
@@ -32,12 +39,23 @@ func main() {
 		fmt.Println("Region\tTotalSites\tDuplexSites\tDuplexFraction")
 	}
 
+	var a []output
+
 	startTolerance := uint32(*tolerance)
 	var currChrom string
 	var currStart uint32
 	var totalReads, duplexSites, totalSites int
 	var bcFor, bcRev, currBcFor, currBcRev string
 	for r := range reads {
+
+		if r.RName != currChrom {
+			a = append(a, output{currChrom, totalReads, totalSites, duplexSites})
+			currChrom = r.RName
+			totalReads = 0
+			totalSites = 0
+			duplexSites = 0
+		}
+
 		totalReads++
 		if (currStart >= r.Pos-startTolerance && currStart <= r.Pos+startTolerance) && currChrom == r.RName {
 			currBcFor, currBcRev = barcode.Get(r)
@@ -69,8 +87,8 @@ func main() {
 		}
 	}
 
-	fmt.Printf("Total Reads:\t\t%d\n", totalReads)
-	fmt.Printf("Total Sites:\t\t%d\n", totalSites)
-	fmt.Printf("Duplex Sites:\t\t%d\n", duplexSites)
-	fmt.Printf("Duplex Fraction:\t%f\n", float64(duplexSites)/float64(totalSites))
+	fmt.Println("Chromosome\tTotal Reads\tTotal Sites\tDuplex Fraction")
+	for i := range a {
+		fmt.Printf("%s\t%d\t%d\t%d\n", a[i].chrom, a[i].totReads, a[i].totSites, a[i].totReads)
+	}
 }
