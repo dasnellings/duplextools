@@ -28,6 +28,9 @@ func main() {
 	var chunkStartChrom, chunkEndChrom string = "chr1", "chr1"
 	var chunkTotalSites, chunkDuplexSites int
 	var chunkStart, chunkEnd uint32
+	if updateFreq > 0 {
+		fmt.Println("Region\tTotalSites\tDuplexSites\tDuplexFraction")
+	}
 
 	startTolerance := uint32(*tolerance)
 	var currChrom string
@@ -55,10 +58,7 @@ func main() {
 		if updateFreq > 0 && totalReads%updateFreq == 0 {
 			chunkEndChrom = r.RName
 			chunkEnd = r.Pos
-			fmt.Printf("%s:%d-%s:%d\n", chunkStartChrom, chunkStart, chunkEndChrom, chunkEnd)
-			fmt.Printf("Total Sites:\t%d\n", chunkTotalSites)
-			fmt.Printf("Duplex Sites:\t%d\n", chunkDuplexSites)
-			fmt.Printf("Duplex Fraction:\t%f\n\n", float64(chunkDuplexSites)/float64(chunkTotalSites))
+			fmt.Printf("%s:%d-%s:%d\t%d\t%d\t%f\n", chunkStartChrom, chunkStart, chunkEndChrom, chunkEnd, chunkTotalSites, chunkDuplexSites, float64(chunkDuplexSites)/float64(chunkTotalSites))
 			chunkStartChrom = chunkEndChrom
 			chunkStart = chunkEnd
 			chunkTotalSites = 0
