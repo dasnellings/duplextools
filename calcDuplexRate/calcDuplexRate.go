@@ -47,12 +47,15 @@ func main() {
 	var totalReads, duplexSites, totalSites int
 	var bcFor, bcRev, currBcFor, currBcRev string
 	for r := range reads {
-
+		if r.Cigar == nil || r.Cigar[0].Op == '*' {
+			continue
+		}
 		if r.RName != currChrom {
 			a = append(a, output{currChrom, totalReads, totalSites, duplexSites})
 			currChrom = r.RName
 			totalReads = 0
 			totalSites = 0
+
 			duplexSites = 0
 		}
 
@@ -87,11 +90,11 @@ func main() {
 		}
 	}
 
-	fmt.Println("Chromosome\tTotal Reads\tTotal Sites\tDuplex Fraction")
+	fmt.Println("Chromosome\tTotal Reads\tTotal Sites\tDuplex Sites\tDuplex Fraction")
 	for i := range a {
 		if a[i].chrom == "" {
 			continue
 		}
-		fmt.Printf("%s\t%d\t%d\t%d\t%f\n", a[i].chrom, a[i].totReads, a[i].totSites, a[i].totReads, float64(a[i].dupSites)/float64(a[i].totSites))
+		fmt.Printf("%s\t%d\t%d\t%d\t%f\n", a[i].chrom, a[i].totReads, a[i].totSites, a[i].dupSites, float64(a[i].dupSites)/float64(a[i].totSites))
 	}
 }
