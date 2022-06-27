@@ -58,6 +58,9 @@ func main() {
 		if updateFreq > 0 && totalReads%updateFreq == 0 {
 			chunkEndChrom = r.RName
 			chunkEnd = r.Pos
+			if chunkStartChrom == "" {
+				chunkStartChrom = chunkEndChrom
+			}
 			fmt.Printf("%s:%d-%s:%d\t%d\t%d\t%f\n", chunkStartChrom, chunkStart, chunkEndChrom, chunkEnd, chunkTotalSites, chunkDuplexSites, float64(chunkDuplexSites)/float64(chunkTotalSites))
 			chunkStartChrom = chunkEndChrom
 			chunkStart = chunkEnd
