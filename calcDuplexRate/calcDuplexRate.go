@@ -13,6 +13,7 @@ const startTolerance int = 0
 func main() {
 	tolerance := flag.Int("t", 0, "Deviation from exact start match to be considered same allele. 0 means perfect match.")
 	infile := flag.String("i", "", "Input coordinate sorted BAM or SAM file.")
+	update := flag.Int("u", 0, "Print duplex rate in chunks, ever INT reads. 0 only reports after all data is read.")
 	flag.Parse()
 
 	if *infile == "" {
@@ -23,6 +24,10 @@ func main() {
 	if header.Metadata.SortOrder[0] != sam.Coordinate {
 		log.Fatal("ERROR: input file must be coordinate sorted")
 	}
+	updateFreq := *update
+	var chunkStartChrom, chunkEndChrom string = "chr1", "chr1"
+	var chunkTotalSites, chunkDuplexSites int
+	var chunkStart, chunkEnd uint32
 
 	startTolerance := uint32(*tolerance)
 	var currChrom string
@@ -35,22 +40,30 @@ func main() {
 			currBcFor, currBcRev = barcode.Get(r)
 			if currBcFor == bcRev && currBcRev == bcFor {
 				duplexSites++
+				chunkDuplexSites++
 				bcFor = "dummy"
 				bcRev = "dummy"
 			}
 		} else {
 			totalSites++
+			chunkTotalSites++
 			currStart = r.Pos
 			currChrom = r.RName
 			bcFor, bcRev = barcode.Get(r)
 		}
 
-		//if totalReads%100000 == 0 {
-		//	fmt.Printf("Total Reads:\t%d\n", totalReads)
-		//	fmt.Printf("Total Sites:\t%d\n", totalSites)
-		//	fmt.Printf("Duplex Sites:\t%d\n", duplexSites)
-		//	fmt.Printf("Duplex Fraction:\t%f\n\n", float64(duplexSites)/float64(totalSites))
-		//}
+		if updateFreq > 0 && totalReads%updateFreq == 0 {
+			chunkEndChrom = r.RName
+			chunkEnd = r.Pos
+			fmt.Printf("%s:%d-%s:%d\n", chunkStartChrom, chunkStart, chunkEndChrom, chunkEnd)
+			fmt.Printf("Total Sites:\t%d\n", chunkTotalSites)
+			fmt.Printf("Duplex Sites:\t%d\n", chunkDuplexSites)
+			fmt.Printf("Duplex Fraction:\t%f\n\n", float64(chunkDuplexSites)/float64(chunkTotalSites))
+			chunkStartChrom = chunkEndChrom
+			chunkStart = chunkEnd
+			chunkTotalSites = 0
+			chunkDuplexSites = 1
+		}
 	}
 
 	fmt.Printf("Total Reads:\t\t%d\n", totalReads)
