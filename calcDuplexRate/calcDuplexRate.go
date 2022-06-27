@@ -89,6 +89,6 @@ func main() {
 
 	fmt.Println("Chromosome\tTotal Reads\tTotal Sites\tDuplex Fraction")
 	for i := range a {
-		fmt.Printf("%s\t%d\t%d\t%d\n", a[i].chrom, a[i].totReads, a[i].totSites, a[i].totReads)
+		fmt.Printf("%s\t%d\t%d\t%d\t%f\n", a[i].chrom, a[i].totReads, a[i].totSites, a[i].totReads, float64(a[i].dupSites)/float64(a[i].totSites))
 	}
 }
