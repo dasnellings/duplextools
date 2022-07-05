@@ -62,12 +62,20 @@ func annotateReadFamilies(input, output string, tolerance int, strict bool, bed 
 	if bed != "" {
 		bedOut = fileio.EasyCreate(bed)
 	}
+	var prevChrom string
 
 	for r := range reads {
 		if r.RName == "" {
 			continue
 		}
 		sam.WriteToBamFileHandle(bw, r, 0)
+
+		if r.RName != prevChrom {
+			for k, b := range m {
+				fmt.Fprintf(bedOut, "%s\t%d\t%d\t%s", b.chr, b.start, b.end, b.family)
+				delete(m, k)
+			}
+		}
 
 		if bed != "" {
 			rf = getRF(&r)
@@ -82,6 +90,7 @@ func annotateReadFamilies(input, output string, tolerance int, strict bool, bed 
 			}
 			m[rf] = mb
 		}
+		prevChrom = r.RName
 	}
 
 	if bed != "" {
