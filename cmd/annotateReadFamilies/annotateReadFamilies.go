@@ -23,7 +23,7 @@ func usage() {
 func main() {
 	input := flag.String("i", "", "Input bam file. Must be coordinate sorted.")
 	output := flag.String("o", "stdout", "Output bam file.")
-	bed := flag.String("bed", "", "Output a bed file with the region covered by each read family.")
+	bed := flag.String("bed", "", "Output a bed file with the region covered by each read family. May significantly increase memory usage.")
 	strict := flag.Bool("strict", false, "Require perfect barcode match for family inclusion. Disables position matching. Use for high density data.")
 	tolerance := flag.Int("t", 1000, "Deviation from exact start match to be considered for inclusion in read family. 0 means perfect match. Low values are best for dense data, and high values are best for sparse data.")
 	flag.Parse()
