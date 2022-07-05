@@ -21,6 +21,7 @@ func usage() {
 func main() {
 	input := flag.String("i", "", "Input bam file. Must be coordinate sorted.")
 	output := flag.String("o", "stdout", "Output bam file.")
+	strict := flag.Bool("strict", false, "Require perfect barcode match for family inclusion. Disables position matching. Use for high density data.")
 	tolerance := flag.Int("t", 1000, "Deviation from exact start match to be considered for inclusion in read family. 0 means perfect match. Low values are best for dense data, and high values are best for sparse data.")
 	flag.Parse()
 
@@ -29,16 +30,16 @@ func main() {
 		log.Fatal("ERROR: Must input a coordinate sorted bam file.")
 	}
 
-	annotateReadFamilies(*input, *output, *tolerance)
+	annotateReadFamilies(*input, *output, *tolerance, *strict)
 }
 
-func annotateReadFamilies(input, output string, tolerance int) {
+func annotateReadFamilies(input, output string, tolerance int, strict bool) {
 	reads, header := sam.GoReadToChan(input)
 	if header.Metadata.SortOrder[0] != sam.Coordinate {
 		log.Fatal("ERROR: Input file must be coordinate sorted.")
 	}
 
-	reads = families.GoAnnotate(reads, tolerance)
+	reads = families.GoAnnotate(reads, tolerance, !strict)
 
 	out := fileio.EasyCreate(output)
 	bw := sam.NewBamWriter(out, header)

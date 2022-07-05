@@ -6,19 +6,20 @@ import (
 	"github.com/vertgenlab/gonomics/sam"
 )
 
-func GoAnnotate(reads <-chan sam.Sam, startTolerance int) <-chan sam.Sam {
+func GoAnnotate(reads <-chan sam.Sam, startTolerance int, posMatching bool) <-chan sam.Sam {
 	out := make(chan sam.Sam, 1000)
-	go annotate(reads, out, uint32(startTolerance))
+	go annotate(reads, out, startTolerance, posMatching)
 	return out
 }
 
 type family struct {
 	chr      string
-	pos      uint32
+	start    int
+	end      int
 	familyId uint
 }
 
-func annotate(in <-chan sam.Sam, out chan<- sam.Sam, startTolerance uint32) {
+func annotate(in <-chan sam.Sam, out chan<- sam.Sam, startTolerance int, posMatching bool) {
 	m := make(map[string]family)
 	var currFamilyId uint
 	var id string
@@ -31,13 +32,18 @@ func annotate(in <-chan sam.Sam, out chan<- sam.Sam, startTolerance uint32) {
 		}
 		currFam = m[id]
 		switch {
-		case r.RName == currFam.chr && r.Pos <= currFam.pos+startTolerance: // part of existing family
+		case r.RName == currFam.chr && r.GetChromStart() <= currFam.start+startTolerance: // barcode match, part of existing family
 			addFamilyTag(&r, currFam.familyId)
+
+		case posMatching && r.RName == currFam.chr && (r.GetChromStart() == currFam.start || r.GetChromEnd() == currFam.end): // start/end match, probably part of existing family
+			addFamilyTag(&r, currFam.familyId)
+
 		default: // must overwrite existing family
 			currFamilyId++
 			currFam = family{
 				chr:      r.RName,
-				pos:      r.Pos,
+				start:    r.GetChromStart(),
+				end:      r.GetChromEnd(),
 				familyId: currFamilyId,
 			}
 			m[id] = currFam
