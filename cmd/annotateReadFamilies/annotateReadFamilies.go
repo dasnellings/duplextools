@@ -72,7 +72,7 @@ func annotateReadFamilies(input, output string, tolerance int, strict bool, bed 
 
 		if r.RName != prevChrom {
 			for k, b := range m {
-				fmt.Fprintf(bedOut, "%s\t%d\t%d\t%s", b.chr, b.start, b.end, b.family)
+				fmt.Fprintf(bedOut, "%s\t%d\t%d\t%s\n", b.chr, b.start, b.end, b.family)
 				delete(m, k)
 			}
 		}
@@ -95,7 +95,7 @@ func annotateReadFamilies(input, output string, tolerance int, strict bool, bed 
 
 	if bed != "" {
 		for _, b := range m {
-			fmt.Fprintf(bedOut, "%s\t%d\t%d\t%s", b.chr, b.start, b.end, b.family)
+			fmt.Fprintf(bedOut, "%s\t%d\t%d\t%s\n", b.chr, b.start, b.end, b.family)
 		}
 		err = bedOut.Close()
 		exception.PanicOnErr(err)
