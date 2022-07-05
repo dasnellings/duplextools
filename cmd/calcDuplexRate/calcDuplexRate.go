@@ -91,10 +91,16 @@ func main() {
 	}
 
 	fmt.Println("Chromosome\tTotal Reads\tTotal Sites\tDuplex Sites\tDuplex Fraction")
+	var sum output
+	sum.chrom = "all_chr"
 	for i := range a {
 		if a[i].chrom == "" {
 			continue
 		}
+		sum.totReads += a[i].totReads
+		sum.totSites += a[i].totSites
+		sum.dupSites += a[i].dupSites
 		fmt.Printf("%s\t%d\t%d\t%d\t%f\n", a[i].chrom, a[i].totReads, a[i].totSites, a[i].dupSites, float64(a[i].dupSites)/float64(a[i].totSites))
 	}
+	fmt.Printf("%s\t%d\t%d\t%d\t%f\n", sum.chrom, sum.totReads, sum.totSites, sum.dupSites, float64(sum.dupSites)/float64(sum.totSites))
 }
