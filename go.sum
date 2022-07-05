@@ -1,8 +1,10 @@
-github.com/vertgenlab/gonomics v0.0.0-20220606175524-1488361023dd h1:DbmduhyeGkaPNjPKw8kswjoM6eZ6Plv239yHtRgusis=
-github.com/vertgenlab/gonomics v0.0.0-20220606175524-1488361023dd/go.mod h1:RaxcRybcD8qdv92oUS+z0eJvjdV7Hg1xg1H7468ptfA=
-github.com/vertgenlab/gonomics v0.0.0-20220621134231-354460a18b28 h1:To0ifWwrqCvUJ6eh9gXLXUqwsQQ3j4bcP6d8W8MTB4w=
-github.com/vertgenlab/gonomics v0.0.0-20220621134231-354460a18b28/go.mod h1:RaxcRybcD8qdv92oUS+z0eJvjdV7Hg1xg1H7468ptfA=
 github.com/vertgenlab/gonomics v0.0.0-20220705154006-534bd98358a9 h1:KtROlPy1+/lQCDppyWd5uyQ9tYwpMinhpp3s/O4lCtk=
 github.com/vertgenlab/gonomics v0.0.0-20220705154006-534bd98358a9/go.mod h1:RaxcRybcD8qdv92oUS+z0eJvjdV7Hg1xg1H7468ptfA=
+github.com/vertgenlab/gonomics v0.0.0-20220705162420-9deafd74bad7 h1:shYGUHCd5+2C6vsXPkCoyf4dhoHtbVVXAGHseBlRPVI=
+github.com/vertgenlab/gonomics v0.0.0-20220705162420-9deafd74bad7/go.mod h1:RaxcRybcD8qdv92oUS+z0eJvjdV7Hg1xg1H7468ptfA=
+github.com/vertgenlab/gonomics v0.0.0-20220705163055-d7db0a7364a5 h1:Ka4VV3esvNKhYcLWv54sPNPLvaNo2+CP+bWo0BuWgi8=
+github.com/vertgenlab/gonomics v0.0.0-20220705163055-d7db0a7364a5/go.mod h1:RaxcRybcD8qdv92oUS+z0eJvjdV7Hg1xg1H7468ptfA=
+github.com/vertgenlab/gonomics v0.0.0-20220705164419-2c371aee51ae h1:hY5z0avjiIkPavrE0WQxOEOkaSdE10117wKjOujkiHk=
+github.com/vertgenlab/gonomics v0.0.0-20220705164419-2c371aee51ae/go.mod h1:RaxcRybcD8qdv92oUS+z0eJvjdV7Hg1xg1H7468ptfA=
 golang.org/x/exp v0.0.0-20220314205449-43aec2f8a4e7 h1:jynE66seADJbyWMUdeOyVTvPtBZt7L6LJHupGwxPZRM=
 golang.org/x/exp v0.0.0-20220314205449-43aec2f8a4e7/go.mod h1:lgLbSvA5ygNOMpwM/9anMpWVlVJ7Z+cHWq/eFuinpGE=

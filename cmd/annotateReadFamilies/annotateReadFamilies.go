@@ -21,7 +21,7 @@ func usage() {
 func main() {
 	input := flag.String("i", "", "Input bam file. Must be coordinate sorted.")
 	output := flag.String("o", "stdout", "Output bam file.")
-	tolerance := flag.Int("t", 300, "Deviation from exact start match to be considered for inclusion in read family. 0 means perfect match. Low values are best for dense data, and high values are best for sparse data.")
+	tolerance := flag.Int("t", 1000, "Deviation from exact start match to be considered for inclusion in read family. 0 means perfect match. Low values are best for dense data, and high values are best for sparse data.")
 	flag.Parse()
 
 	if *input == "" {
@@ -44,9 +44,14 @@ func annotateReadFamilies(input, output string, tolerance int) {
 	bw := sam.NewBamWriter(out, header)
 
 	for r := range reads {
+		if r.RName == "" {
+			continue
+		}
 		sam.WriteToBamFileHandle(bw, r, 0)
 	}
 
-	err := out.Close()
+	err := bw.Close()
+	exception.PanicOnErr(err)
+	err = out.Close()
 	exception.PanicOnErr(err)
 }

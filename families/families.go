@@ -25,6 +25,10 @@ func annotate(in <-chan sam.Sam, out chan<- sam.Sam, startTolerance uint32) {
 	var currFam family
 	for r := range in {
 		id = getId(barcode.Get(r))
+		if id == "" {
+			out <- r
+			continue
+		}
 		currFam = m[id]
 		switch {
 		case r.RName == currFam.chr && r.Pos <= currFam.pos+startTolerance: // part of existing family
@@ -39,13 +43,15 @@ func annotate(in <-chan sam.Sam, out chan<- sam.Sam, startTolerance uint32) {
 			m[id] = currFam
 			addFamilyTag(&r, currFam.familyId)
 		}
-		sam.UpdatedExtra(&r)
 		out <- r
 	}
 	close(out)
 }
 
 func getId(a, b string) string {
+	if a == "" || b == "" {
+		return ""
+	}
 	if a > b {
 		return a + "-" + b
 	}
@@ -53,5 +59,9 @@ func getId(a, b string) string {
 }
 
 func addFamilyTag(s *sam.Sam, famId uint) {
-	s.Extra += fmt.Sprintf("\tRF:Z:%d", famId)
+	sam.ParseExtra(s)
+	if s.Extra != "" {
+		s.Extra += "\t"
+	}
+	s.Extra += fmt.Sprintf("RF:Z:%d", famId)
 }
