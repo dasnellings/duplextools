@@ -25,7 +25,8 @@ func main() {
 	output := flag.String("o", "stdout", "Output bam file.")
 	bed := flag.String("bed", "", "Output a bed file with the region covered by each read family. May significantly increase memory usage.")
 	strict := flag.Bool("strict", false, "Require perfect barcode match for family inclusion. Disables position matching. Use for high density data.")
-	tolerance := flag.Int("t", 50, "Deviation from exact start match to be considered for inclusion in read family. 0 means perfect match. Low values are best for dense data, and high values are best for sparse data.")
+	tolerance := flag.Int("tolerance", 50, "Deviation from exact start match to be considered for inclusion in read family. 0 means perfect match. Low values are best for dense data, and high values are best for sparse data.")
+	minMapQ := flag.Int("minMapQ", 20, "Minimum mapping quality.")
 	flag.Parse()
 
 	if *input == "" {
@@ -33,7 +34,7 @@ func main() {
 		log.Fatal("ERROR: Must input a coordinate sorted bam file.")
 	}
 
-	annotateReadFamilies(*input, *output, *tolerance, *strict, *bed)
+	annotateReadFamilies(*input, *output, *tolerance, *strict, *bed, uint8(*minMapQ))
 }
 
 type minimalBed struct {
@@ -44,7 +45,7 @@ type minimalBed struct {
 	count  int
 }
 
-func annotateReadFamilies(input, output string, tolerance int, strict bool, bed string) {
+func annotateReadFamilies(input, output string, tolerance int, strict bool, bed string, minMapQ uint8) {
 	var err error
 	reads, header := sam.GoReadToChan(input)
 	if header.Metadata.SortOrder[0] != sam.Coordinate {
@@ -66,7 +67,7 @@ func annotateReadFamilies(input, output string, tolerance int, strict bool, bed 
 	var prevChrom string
 
 	for r := range reads {
-		if r.RName == "" {
+		if r.RName == "" || r.MapQ < minMapQ {
 			continue
 		}
 		sam.WriteToBamFileHandle(bw, r, 0)
