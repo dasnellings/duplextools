@@ -41,6 +41,7 @@ type minimalBed struct {
 	start  int
 	end    int
 	family string
+	count  int
 }
 
 func annotateReadFamilies(input, output string, tolerance int, strict bool, bed string) {
@@ -56,9 +57,9 @@ func annotateReadFamilies(input, output string, tolerance int, strict bool, bed 
 	bw := sam.NewBamWriter(out, header)
 
 	var bedOut io.WriteCloser
-	m := make(map[string]minimalBed)
+	m := make(map[string]*minimalBed)
 	var rf string
-	var mb minimalBed
+	var mb *minimalBed
 	if bed != "" {
 		bedOut = fileio.EasyCreate(bed)
 	}
@@ -72,7 +73,7 @@ func annotateReadFamilies(input, output string, tolerance int, strict bool, bed 
 
 		if r.RName != prevChrom {
 			for k, b := range m {
-				fmt.Fprintf(bedOut, "%s\t%d\t%d\t%s\n", b.chr, b.start, b.end, b.family)
+				fmt.Fprintf(bedOut, "%s\t%d\t%d\t%s\t%d\n", b.chr, b.start, b.end, b.family, b.count)
 				delete(m, k)
 			}
 		}
@@ -80,22 +81,26 @@ func annotateReadFamilies(input, output string, tolerance int, strict bool, bed 
 		if bed != "" {
 			rf = getRF(&r)
 			mb = m[rf]
-			mb.chr = r.RName
-			mb.family = rf
+			if mb == nil {
+				mb = new(minimalBed)
+				m[rf] = mb
+				mb.chr = r.RName
+				mb.family = rf
+			}
 			if mb.start == 0 || mb.start > r.GetChromStart() {
 				mb.start = r.GetChromStart()
 			}
 			if mb.end < r.GetChromEnd() {
 				mb.end = r.GetChromEnd()
 			}
-			m[rf] = mb
+			mb.count++
 		}
 		prevChrom = r.RName
 	}
 
 	if bed != "" {
 		for _, b := range m {
-			fmt.Fprintf(bedOut, "%s\t%d\t%d\t%s\n", b.chr, b.start, b.end, b.family)
+			fmt.Fprintf(bedOut, "%s\t%d\t%d\t%s\t%d\n", b.chr, b.start, b.end, b.family, b.count)
 		}
 		err = bedOut.Close()
 		exception.PanicOnErr(err)
