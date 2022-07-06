@@ -11,9 +11,11 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"sort"
+	"strings"
 )
 
-const debug int = 0
+const debug int = 1
 
 var countMat []int
 
@@ -30,6 +32,8 @@ func main() {
 	output := flag.String("o", "stdout", "Output bedgraph file.")
 	minOverlap := flag.Int("minOverlap", 10, "Minimum overlap of two read families to be considered from different alleles. Tn5 generates a 9bp overlap.")
 	maxBedLength := flag.Int("maxBedLen", 2000, "Maximum size of a bed record for inclusion in analysis.")
+	minReads := flag.Int("minReads", 3, "Minimum size of read family for inclusion in analysis.")
+	mergeIdenticalPos := flag.Bool("merge", true, "Merge bed records with identical starts OR identical ends.")
 	//minReadsPerFamily := flag.Int("minReads", 1, "Minimum number of reads in a read family for inclusion in analysis.")
 	flag.Parse()
 
@@ -38,10 +42,10 @@ func main() {
 		log.Fatal("ERROR: Must input a coordinate sorted bed file.")
 	}
 
-	callCopyNumber(*input, *output, *minOverlap-1, *maxBedLength)
+	callCopyNumber(*input, *output, *minOverlap-1, *maxBedLength, *minReads, *mergeIdenticalPos)
 }
 
-func callCopyNumber(input, output string, trimLen, maxBedLen int) {
+func callCopyNumber(input, output string, trimLen, maxBedLen, minReads int, merge bool) {
 	var err error
 	var prevChrom string
 	var prevStart int
@@ -51,7 +55,7 @@ func callCopyNumber(input, output string, trimLen, maxBedLen int) {
 
 	var debugOut io.WriteCloser
 	if debug == 1 {
-		debugOut = fileio.EasyCreate("debug.bed")
+		debugOut = fileio.EasyCreate("debug_" + strings.TrimRight(output, ".bedgraph") + ".bed")
 	}
 	for b := range records {
 		if b.Chrom == prevChrom && b.ChromStart < prevStart {
@@ -61,7 +65,7 @@ func callCopyNumber(input, output string, trimLen, maxBedLen int) {
 		prevStart = b.ChromStart
 
 		err = trim(&b, trimLen)
-		if err != nil || b.ChromEnd-b.ChromStart > maxBedLen {
+		if err != nil || b.ChromEnd-b.ChromStart > maxBedLen || b.Score < minReads {
 			continue
 		}
 
@@ -70,7 +74,7 @@ func callCopyNumber(input, output string, trimLen, maxBedLen int) {
 			overlapSet = append(overlapSet, b)
 
 		case !anyOverlaps(overlapSet, b): // no overlaps with set
-			writeOverlapsCounting(out, overlapSet, debugOut)
+			writeOverlapsCounting(out, overlapSet, merge, debugOut)
 			overlapSet = overlapSet[:0]
 			overlapSet = append(overlapSet, b)
 
@@ -78,7 +82,7 @@ func callCopyNumber(input, output string, trimLen, maxBedLen int) {
 			overlapSet = append(overlapSet, b)
 		}
 	}
-	writeOverlapsCounting(out, overlapSet, debugOut)
+	writeOverlapsCounting(out, overlapSet, merge, debugOut)
 	err = out.Close()
 	exception.PanicOnErr(err)
 	if debug == 1 {
@@ -121,10 +125,14 @@ func writeOverlaps(out io.Writer, set []bed.Bed, debugOut io.Writer) {
 	}
 }
 
-func writeOverlapsCounting(out io.Writer, set []bed.Bed, debugOut io.Writer) {
+func writeOverlapsCounting(out io.Writer, set []bed.Bed, merge bool, debugOut io.Writer) {
 	t := rand.Uint32()
 	if len(set) == 0 {
 		return
+	}
+
+	if merge {
+		set = mergeIdenticalEndpoints(set)
 	}
 
 	if debug == 1 {
@@ -204,4 +212,44 @@ func resetStack(set *[]bed.Bed, curr *bed.Bed) {
 	}
 	curr.ChromStart = (*set)[0].ChromStart
 	curr.ChromEnd = (*set)[0].ChromEnd
+}
+
+func mergeIdenticalEndpoints(set []bed.Bed) []bed.Bed {
+	for i := 1; i < len(set); i++ {
+		if set[i].ChromStart == set[i-1].ChromStart {
+			set[i].ChromEnd = max(set[i].ChromEnd, set[i-1].ChromEnd)
+			set = slices.Delete(set, i-1, i)
+		}
+	}
+
+	sort.Slice(set, func(i, j int) bool {
+		return set[i].ChromEnd < set[j].ChromEnd
+	})
+
+	for i := 1; i < len(set); i++ {
+		if set[i].ChromEnd == set[i-1].ChromEnd {
+			set[i].ChromStart = min(set[i].ChromStart, set[i-1].ChromStart)
+			set = slices.Delete(set, i-1, i)
+		}
+	}
+
+	sort.Slice(set, func(i, j int) bool {
+		return set[i].ChromStart < set[j].ChromStart
+	})
+
+	return set
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
