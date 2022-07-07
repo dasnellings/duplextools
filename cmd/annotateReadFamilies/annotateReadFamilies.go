@@ -65,6 +65,7 @@ func annotateReadFamilies(input, output string, tolerance int, strict bool, bed 
 		bedOut = fileio.EasyCreate(bed)
 	}
 	var prevChrom string
+	var readCount int
 
 	for r := range reads {
 		if r.RName == "" || r.MapQ < minMapQ {
@@ -72,6 +73,10 @@ func annotateReadFamilies(input, output string, tolerance int, strict bool, bed 
 		}
 		sam.WriteToBamFileHandle(bw, r, 0)
 
+		if bed == "" {
+			continue
+		}
+		readCount++
 		if r.RName != prevChrom {
 			for k, b := range m {
 				fmt.Fprintf(bedOut, "%s\t%d\t%d\t%s\t%d\n", b.chr, b.start, b.end, b.family, b.count)
@@ -79,24 +84,31 @@ func annotateReadFamilies(input, output string, tolerance int, strict bool, bed 
 			}
 		}
 
-		if bed != "" {
-			rf = getRF(&r)
-			mb = m[rf]
-			if mb == nil {
-				mb = new(minimalBed)
-				m[rf] = mb
-				mb.chr = r.RName
-				mb.family = rf
-			}
-			if mb.start == 0 || mb.start > r.GetChromStart() {
-				mb.start = r.GetChromStart()
-			}
-			if mb.end < r.GetChromEnd() {
-				mb.end = r.GetChromEnd()
-			}
-			mb.count++
+		rf = getRF(&r)
+		mb = m[rf]
+		if mb == nil {
+			mb = new(minimalBed)
+			m[rf] = mb
+			mb.chr = r.RName
+			mb.family = rf
 		}
+		if mb.start == 0 || mb.start > r.GetChromStart() {
+			mb.start = r.GetChromStart()
+		}
+		if mb.end < r.GetChromEnd() {
+			mb.end = r.GetChromEnd()
+		}
+		mb.count++
 		prevChrom = r.RName
+
+		if readCount%10000 == 0 { // write every 10000 reads
+			for k, b := range m {
+				if b.end < r.GetChromStart()-10000 { // only write if family is at least 10kb away
+					fmt.Fprintf(bedOut, "%s\t%d\t%d\t%s\t%d\n", b.chr, b.start, b.end, b.family, b.count)
+					delete(m, k)
+				}
+			}
+		}
 	}
 
 	if bed != "" {

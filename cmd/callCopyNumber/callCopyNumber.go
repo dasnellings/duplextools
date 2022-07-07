@@ -180,7 +180,9 @@ func writeOverlapsCounting(out io.Writer, set []bed.Bed, merge bool, debugOut io
 		}
 	}
 	curr.ChromEnd = end
-	fmt.Fprintf(out, "%s\t%d\t%d\t%d\n", curr.Chrom, curr.ChromStart, curr.ChromEnd, countMat[len(countMat)-1])
+	if len(countMat) > 0 {
+		fmt.Fprintf(out, "%s\t%d\t%d\t%d\n", curr.Chrom, curr.ChromStart, curr.ChromEnd, countMat[len(countMat)-1])
+	}
 }
 
 func anyOverlaps(set []bed.Bed, query bed.Bed) bool {
