@@ -1,6 +1,7 @@
 package barcode
 
 import (
+	"fmt"
 	"github.com/vertgenlab/gonomics/dna"
 	"github.com/vertgenlab/gonomics/exception"
 	"github.com/vertgenlab/gonomics/fastq"
@@ -213,4 +214,39 @@ func minimum(a, b, c int) int {
 		}
 	}
 	return c
+}
+
+func minLevenshtein() int {
+	barcodes := []string{McsB1,
+		McsB2,
+		McsB3,
+		McsB4,
+		McsB5,
+		McsB6,
+		McsB7,
+		McsB8,
+		McsB9,
+		McsB10,
+		McsB11,
+		McsB12,
+		McsB13,
+		McsB14,
+		McsB15,
+		McsB16}
+
+	var min, curr int = 10, 0
+	for i := range barcodes {
+		for j := range barcodes {
+			if j == i {
+				continue
+			}
+			curr = levenshteinString(barcodes[i], barcodes[j])
+			fmt.Printf("Curr:\t%d\t%d\t%d\n", i, j, curr)
+			if curr < min {
+				min = curr
+			}
+		}
+	}
+	fmt.Println("Min:", min)
+	return min
 }

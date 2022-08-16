@@ -9,6 +9,7 @@ import (
 	"github.com/vertgenlab/gonomics/sam"
 	"io"
 	"log"
+	"sort"
 	"strings"
 )
 
@@ -66,6 +67,7 @@ func annotateReadFamilies(input, output string, tolerance int, strict bool, bed 
 	}
 	var prevChrom string
 	var readCount int
+	var bedToWrite []*minimalBed
 
 	for r := range reads {
 		if r.RName == "" || r.MapQ < minMapQ {
@@ -79,9 +81,29 @@ func annotateReadFamilies(input, output string, tolerance int, strict bool, bed 
 		readCount++
 		if r.RName != prevChrom {
 			for k, b := range m {
-				fmt.Fprintf(bedOut, "%s\t%d\t%d\t%s\t%d\n", b.chr, b.start, b.end, b.family, b.count)
+				bedToWrite = append(bedToWrite, b)
 				delete(m, k)
 			}
+			sort.Slice(bedToWrite, func(i, j int) bool {
+				switch {
+				case bedToWrite[i].chr < bedToWrite[j].chr:
+					return true
+				case bedToWrite[i].chr > bedToWrite[j].chr:
+					return false
+				case bedToWrite[i].start < bedToWrite[j].start:
+					return true
+				case bedToWrite[i].start > bedToWrite[j].start:
+					return false
+				case bedToWrite[i].end < bedToWrite[j].end:
+					return true
+				default:
+					return false
+				}
+			})
+			for _, b := range bedToWrite {
+				fmt.Fprintf(bedOut, "%s\t%d\t%d\t%s\t%d\n", b.chr, b.start, b.end, b.family, b.count)
+			}
+			bedToWrite = bedToWrite[:0]
 		}
 
 		rf = getRF(&r)
@@ -104,15 +126,55 @@ func annotateReadFamilies(input, output string, tolerance int, strict bool, bed 
 		if readCount%10000 == 0 { // write every 10000 reads
 			for k, b := range m {
 				if b.end < r.GetChromStart()-10000 { // only write if family is at least 10kb away
-					fmt.Fprintf(bedOut, "%s\t%d\t%d\t%s\t%d\n", b.chr, b.start, b.end, b.family, b.count)
+					bedToWrite = append(bedToWrite, b)
 					delete(m, k)
 				}
 			}
+			sort.Slice(bedToWrite, func(i, j int) bool {
+				switch {
+				case bedToWrite[i].chr < bedToWrite[j].chr:
+					return true
+				case bedToWrite[i].chr > bedToWrite[j].chr:
+					return false
+				case bedToWrite[i].start < bedToWrite[j].start:
+					return true
+				case bedToWrite[i].start > bedToWrite[j].start:
+					return false
+				case bedToWrite[i].end < bedToWrite[j].end:
+					return true
+				default:
+					return false
+				}
+			})
+			for _, b := range bedToWrite {
+				fmt.Fprintf(bedOut, "%s\t%d\t%d\t%s\t%d\n", b.chr, b.start, b.end, b.family, b.count)
+			}
+			bedToWrite = bedToWrite[:0]
 		}
 	}
 
 	if bed != "" {
-		for _, b := range m {
+		for k, b := range m {
+			bedToWrite = append(bedToWrite, b)
+			delete(m, k)
+		}
+		sort.Slice(bedToWrite, func(i, j int) bool {
+			switch {
+			case bedToWrite[i].chr < bedToWrite[j].chr:
+				return true
+			case bedToWrite[i].chr > bedToWrite[j].chr:
+				return false
+			case bedToWrite[i].start < bedToWrite[j].start:
+				return true
+			case bedToWrite[i].start > bedToWrite[j].start:
+				return false
+			case bedToWrite[i].end < bedToWrite[j].end:
+				return true
+			default:
+				return false
+			}
+		})
+		for _, b := range bedToWrite {
 			fmt.Fprintf(bedOut, "%s\t%d\t%d\t%s\t%d\n", b.chr, b.start, b.end, b.family, b.count)
 		}
 		err = bedOut.Close()
