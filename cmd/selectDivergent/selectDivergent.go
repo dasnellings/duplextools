@@ -7,6 +7,7 @@ import (
 	"github.com/vertgenlab/gonomics/fileio"
 	"github.com/vertgenlab/gonomics/vcf"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -41,6 +42,7 @@ func selectDivergent(input, output, refSamp string, hetsOnly bool, lenDiff int, 
 
 	var totSites, refSites, hetSites int
 	divergentCount := make([]int, len(header.Samples))
+	totalCount := make([]int, len(header.Samples))
 
 	if _, ok := header.Samples[refSamp]; !ok {
 		log.Fatalf("ERROR: reference sample '%s' not found in input VCF\n", refSamp)
@@ -69,6 +71,9 @@ func selectDivergent(input, output, refSamp string, hetsOnly bool, lenDiff int, 
 		hetSites++
 
 		for i := range v.Samples {
+			if len(v.Samples[i].Alleles) > 0 && v.Samples[i].Alleles[0] != -1 {
+				totalCount[i]++
+			}
 			if i == refSampIdx {
 				continue
 			}
@@ -85,12 +90,13 @@ func selectDivergent(input, output, refSamp string, hetsOnly bool, lenDiff int, 
 	exception.PanicOnErr(err)
 
 	if summary {
-		log.Printf("Summary for Reference Sample '%s\n'", refSamp)
-		log.Printf("Total Sites Considered:\t%d\n", totSites)
-		log.Printf("Total Sites With Ref Sample:\t%d\n", refSites)
-		log.Printf("Total Sites Ref Sample Heterozygous:\t%d\n", hetSites)
+		fmt.Fprintf(os.Stderr, "Summary for Reference Sample '%s\n'", refSamp)
+		fmt.Fprintf(os.Stderr, "Total Sites Considered:\t%d\n", totSites)
+		fmt.Fprintf(os.Stderr, "Total Sites With Ref Sample:\t%d\n", refSites)
+		fmt.Fprintf(os.Stderr, "Total Sites Ref Sample Het:\t%d\n", hetSites)
 		for key, val := range header.Samples {
-			log.Printf("%s Divergent Sites:\t%d\n", key, divergentCount[val])
+			fmt.Fprintf(os.Stderr, "%s Tested Sites:\t%d\n", key, totalCount[val])
+			fmt.Fprintf(os.Stderr, "%s Divergent Sites:\t%d\n", key, divergentCount[val])
 		}
 	}
 }
