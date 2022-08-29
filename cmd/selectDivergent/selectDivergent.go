@@ -24,8 +24,9 @@ func main() {
 	var refSample *string = flag.String("r", "", "Reference sample name. Sample must be present in input VCF file.")
 	var output *string = flag.String("o", "stdout", "Output VCF file.")
 	var hetsOnly *bool = flag.Bool("hetOnly", true, "Only consider records where the reference sample is heterozygous.")
-	var minGBDiff *int = flag.Int("minGbDiff", 3, "Minimum size difference to count as a seperate allele as defined by the GB field in FORMAT. Calculated by HipSTR output. Set to zero to disable.")
+	var minGBDiff *int = flag.Int("minGbDiff", 3, "Minimum size difference to count as a separate allele as defined by the GB field in FORMAT. Calculated by HipSTR output. Set to zero to disable.")
 	var summary *bool = flag.Bool("summary", true, "Print a summary of divergent sites after run.")
+	//var clonal *bool = flag.Bool("clonal", false, "Only output variants present in multiple samples.")
 	flag.Parse()
 	flag.Usage = usage
 
@@ -34,10 +35,10 @@ func main() {
 		log.Fatalln("ERROR: must input a VCF file with -i")
 	}
 
-	selectDivergent(*input, *output, *refSample, *hetsOnly, *minGBDiff, *summary)
+	selectDivergent(*input, *output, *refSample, *hetsOnly, *minGBDiff, *summary) //, *clonal)
 }
 
-func selectDivergent(input, output, refSamp string, hetsOnly bool, lenDiff int, summary bool) {
+func selectDivergent(input, output, refSamp string, hetsOnly bool, lenDiff int, summary bool) { //, clonal bool) {
 	records, header := vcf.GoReadToChan(input)
 
 	var totSites, refSites, hetSites int
@@ -55,6 +56,7 @@ func selectDivergent(input, output, refSamp string, hetsOnly bool, lenDiff int, 
 	var refAlleles []int16
 	var refGB []int
 	var alreadyWrote bool
+	//var variantSamplesCount int
 	for v := range records {
 		alreadyWrote = false
 		totSites++
@@ -69,6 +71,7 @@ func selectDivergent(input, output, refSamp string, hetsOnly bool, lenDiff int, 
 			continue
 		}
 		hetSites++
+		//variantSamplesCount = 0
 
 		for i := range v.Samples {
 			if len(v.Samples[i].Alleles) > 0 && v.Samples[i].Alleles[0] != -1 {
@@ -90,7 +93,7 @@ func selectDivergent(input, output, refSamp string, hetsOnly bool, lenDiff int, 
 	exception.PanicOnErr(err)
 
 	if summary {
-		fmt.Fprintf(os.Stderr, "Summary for Reference Sample '%s\n'", refSamp)
+		fmt.Fprintf(os.Stderr, "Summary for Reference Sample '%s'\n", refSamp)
 		fmt.Fprintf(os.Stderr, "Total Sites Considered:\t%d\n", totSites)
 		fmt.Fprintf(os.Stderr, "Total Sites With Ref Sample:\t%d\n", refSites)
 		fmt.Fprintf(os.Stderr, "Total Sites Ref Sample Het:\t%d\n", hetSites)
