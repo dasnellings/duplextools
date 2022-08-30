@@ -26,6 +26,7 @@ func main() {
 	var hetsOnly *bool = flag.Bool("hetOnly", true, "Only consider records where the reference sample is heterozygous.")
 	var minGBDiff *int = flag.Int("minGbDiff", 3, "Minimum size difference to count as a separate allele as defined by the GB field in FORMAT. Calculated by HipSTR output. Set to zero to disable.")
 	var summary *bool = flag.Bool("summary", true, "Print a summary of divergent sites after run.")
+	var minReads *int = flag.Int("minReads", 5, "Minimum supporting reads for each haploid genotype.")
 	//var clonal *bool = flag.Bool("clonal", false, "Only output variants present in multiple samples.")
 	flag.Parse()
 	flag.Usage = usage
@@ -35,10 +36,10 @@ func main() {
 		log.Fatalln("ERROR: must input a VCF file with -i")
 	}
 
-	selectDivergent(*input, *output, *refSample, *hetsOnly, *minGBDiff, *summary) //, *clonal)
+	selectDivergent(*input, *output, *refSample, *hetsOnly, *minGBDiff, *summary, *minReads) //, *clonal)
 }
 
-func selectDivergent(input, output, refSamp string, hetsOnly bool, lenDiff int, summary bool) { //, clonal bool) {
+func selectDivergent(input, output, refSamp string, hetsOnly bool, lenDiff int, summary bool, minReads int) { //, clonal bool) {
 	records, header := vcf.GoReadToChan(input)
 
 	var totSites, refSites, hetSites int
@@ -80,10 +81,11 @@ func selectDivergent(input, output, refSamp string, hetsOnly bool, lenDiff int, 
 			if i == refSampIdx {
 				continue
 			}
-			if hasDivergent(refAlleles, v.Samples[i].Alleles) && divergentGB(refGB, getGB(v.Format, v.Samples[i].FormatData), lenDiff) {
+			if hasDivergent(refAlleles, v.Samples[i].Alleles) && divergentGB(refGB, getGB(v.Format, v.Samples[i].FormatData), lenDiff) && passesMinReadCounts(v.Format, v.Samples[i].FormatData, minReads) {
 				divergentCount[i]++
 				if !alreadyWrote {
 					vcf.WriteVcf(out, v)
+					alreadyWrote = true
 				}
 			}
 		}
@@ -93,15 +95,42 @@ func selectDivergent(input, output, refSamp string, hetsOnly bool, lenDiff int, 
 	exception.PanicOnErr(err)
 
 	if summary {
-		fmt.Fprintf(os.Stderr, "Summary for Reference Sample '%s'\n", refSamp)
-		fmt.Fprintf(os.Stderr, "Total Sites Considered:\t%d\n", totSites)
-		fmt.Fprintf(os.Stderr, "Total Sites With Ref Sample:\t%d\n", refSites)
-		fmt.Fprintf(os.Stderr, "Total Sites Ref Sample Het:\t%d\n", hetSites)
+		fmt.Fprintln(os.Stderr, "Sample\tBulk_Sites\tBulk_Het_Sites\tLibrary\tTested_Sites\tDivergent_Sites\tDivergent_Fraction")
 		for key, val := range header.Samples {
-			fmt.Fprintf(os.Stderr, "%s Tested Sites:\t%d\n", key, totalCount[val])
-			fmt.Fprintf(os.Stderr, "%s Divergent Sites:\t%d\n", key, divergentCount[val])
+			fmt.Fprintf(os.Stderr, "%s\t%d\t%d\t%s\t%d\t%d\t%0.2f", refSamp, refSites, hetSites, key, totalCount[val], divergentCount[val], float64(totalCount[val])/float64(divergentCount[val]))
+		}
+		//fmt.Fprintf(os.Stderr, "Summary for Reference Sample '%s'\n", refSamp)
+		//fmt.Fprintf(os.Stderr, "Total Sites Considered:\t%d\n", totSites)
+		//fmt.Fprintf(os.Stderr, "Total Sites With Ref Sample:\t%d\n", refSites)
+		//fmt.Fprintf(os.Stderr, "Total Sites Ref Sample Het:\t%d\n", hetSites)
+		//for key, val := range header.Samples {
+		//	fmt.Fprintf(os.Stderr, "%s Tested Sites:\t%d\n", key, totalCount[val])
+		//	fmt.Fprintf(os.Stderr, "%s Divergent Sites:\t%d\n", key, divergentCount[val])
+		//}
+	}
+}
+
+func passesMinReadCounts(format []string, formatData []string, minReads int) bool {
+	min := float64(minReads)
+	var idx int
+	for idx = 0; idx < len(format); idx++ {
+		if format[idx] == "PDP" {
+			break
 		}
 	}
+	counts := strings.Split(formatData[idx], "|")
+	if len(counts) != 2 {
+		return false
+	}
+	c1, err := strconv.ParseFloat(counts[0], 64)
+	exception.PanicOnErr(err)
+	c2, err := strconv.ParseFloat(counts[1], 64)
+	exception.PanicOnErr(err)
+
+	if c1 < min || c2 < min {
+		return false
+	}
+	return true
 }
 
 func hasDivergent(ref, test []int16) bool {
