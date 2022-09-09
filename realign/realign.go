@@ -1,7 +1,6 @@
 package realign
 
 import (
-	"fmt"
 	"github.com/vertgenlab/gonomics/align"
 	"github.com/vertgenlab/gonomics/cigar"
 	"github.com/vertgenlab/gonomics/dna"
@@ -10,12 +9,12 @@ import (
 	"log"
 )
 
-var gapOpen int64 = -200
+var gapOpen int64 = -300
 var gapExtend int64 = -10
 
 func GoRealignIndels(reads <-chan sam.Sam, ref *fasta.Seeker) <-chan sam.Sam {
 	output := make(chan sam.Sam, 1000)
-	go realignIndels(reads, output, ref)
+	go realignIndelsEngine(reads, output, ref)
 	return output
 }
 
@@ -30,8 +29,30 @@ func realignIndels(in <-chan sam.Sam, out chan<- sam.Sam, ref *fasta.Seeker) {
 			currStart, currEnd, currRegion = getRegion(r, ref)
 			dna.AllToUpper(currRegion)
 		}
-		score, cig = align.AffineGap_highMem(currRegion, r.Seq, align.HumanChimpTwoScoreMatrix, gapOpen, gapExtend, true)
+		score, cig = align.AffineGapLocal(currRegion, r.Seq, align.HumanChimpTwoScoreMatrix, gapOpen, gapExtend)
 		updateRead(&r, cig, currStart, currEnd, score)
+		out <- r
+	}
+	close(out)
+}
+
+func realignIndelsEngine(in <-chan sam.Sam, out chan<- sam.Sam, ref *fasta.Seeker) {
+	var currStart, currEnd int
+	var currRegion []dna.Base
+	var packet align.TargetQueryPair
+	inputs, outputs := align.GoAffineGapLocalEngine(align.HumanChimpTwoScoreMatrix, gapOpen, gapExtend)
+
+	for r := range in {
+		if !(r.GetChromStart() >= currStart+200 && r.GetChromEnd() <= currEnd-200) {
+			currStart, currEnd, currRegion = getRegion(r, ref)
+			dna.AllToUpper(currRegion)
+		}
+
+		packet.Target = currRegion
+		packet.Query = r.Seq
+		inputs <- packet
+		packet = <-outputs
+		updateRead(&r, packet.Cigar, currStart, currEnd, packet.Score)
 		out <- r
 	}
 	close(out)
@@ -80,7 +101,6 @@ func updateRead(r *sam.Sam, cig []align.Cigar, cigStart, cigEnd int, score int64
 	if cig[len(cig)-1].Op == align.ColD {
 		cig = cig[:len(cig)-1]
 	}
-	fmt.Printf("%s\t%s\t%d\n", r.QName, align.PrintCigar(cig), score)
 	r.Pos = uint32(alignStart) + 1
 	r.Cigar = cigConv(cig)
 	//r.Extra += fmt.Sprintf("\tSC:i:%d", score)
