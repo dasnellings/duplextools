@@ -81,7 +81,7 @@ func selectDivergent(input, output, refSamp string, hetsOnly bool, lenDiff int, 
 			if i == refSampIdx {
 				continue
 			}
-			if hasDivergent(refAlleles, v.Samples[i].Alleles) && divergentGB(refGB, getGB(v.Format, v.Samples[i].FormatData), lenDiff) && passesMinReadCounts(v.Format, v.Samples[i].FormatData, minReads) {
+			if hasDivergent(refAlleles, v.Samples[i].Alleles) && divergentGB(refGB, getGB(v.Format, v.Samples[i].FormatData), lenDiff) && passesMinReadCounts(v.Format, v.Samples[i].FormatData, minReads) && passesAC(v.Info, v.Samples[i].Alleles, minReads) {
 				divergentCount[i]++
 				if !alreadyWrote {
 					vcf.WriteVcf(out, v)
@@ -97,7 +97,7 @@ func selectDivergent(input, output, refSamp string, hetsOnly bool, lenDiff int, 
 	if summary {
 		fmt.Fprintln(os.Stderr, "Sample\tBulk_Sites\tBulk_Het_Sites\tLibrary\tTested_Sites\tDivergent_Sites\tDivergent_Fraction")
 		for key, val := range header.Samples {
-			fmt.Fprintf(os.Stderr, "%s\t%d\t%d\t%s\t%d\t%d\t%0.2f", refSamp, refSites, hetSites, key, totalCount[val], divergentCount[val], float64(totalCount[val])/float64(divergentCount[val]))
+			fmt.Fprintf(os.Stderr, "%s\t%d\t%d\t%s\t%d\t%d\t%0.4f\n", refSamp, refSites, hetSites, key, totalCount[val], divergentCount[val], float64(divergentCount[val])/float64(totalCount[val]))
 		}
 		//fmt.Fprintf(os.Stderr, "Summary for Reference Sample '%s'\n", refSamp)
 		//fmt.Fprintf(os.Stderr, "Total Sites Considered:\t%d\n", totSites)
@@ -108,6 +108,37 @@ func selectDivergent(input, output, refSamp string, hetsOnly bool, lenDiff int, 
 		//	fmt.Fprintf(os.Stderr, "%s Divergent Sites:\t%d\n", key, divergentCount[val])
 		//}
 	}
+}
+
+func passesAC(info string, alleles []int16, min int) bool {
+	words := strings.Split(info, ";")
+	var idx int
+	for idx = 0; idx < len(words); idx++ {
+		if strings.HasPrefix(words[idx], "AC=") {
+			break
+		}
+	}
+
+	if !strings.HasPrefix(words[idx], "AC=") {
+		return false
+	}
+
+	al := strings.TrimLeft(words[idx], "AC=")
+	acstring := strings.Split(al, ",")
+	acs := make([]int, len(acstring))
+
+	var err error
+	for i := range acstring {
+		acs[i], err = strconv.Atoi(acstring[i])
+		exception.PanicOnErr(err)
+	}
+
+	for i := range alleles {
+		if alleles[i] > 0 && acs[alleles[i]-1] < min {
+			return false
+		}
+	}
+	return true
 }
 
 func passesMinReadCounts(format []string, formatData []string, minReads int) bool {

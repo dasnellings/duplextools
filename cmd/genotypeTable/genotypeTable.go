@@ -53,6 +53,8 @@ func genotypeTable(infile, outfile string, gb bool) {
 				currGB = getGB(v.Format, v.Samples[i].FormatData)
 				if len(currGB) > 0 {
 					s.WriteString(fmt.Sprintf("%d/%d", currGB[0], currGB[1]))
+				} else {
+					s.WriteByte('.')
 				}
 				continue
 			}

@@ -9,8 +9,8 @@ import (
 	"log"
 )
 
-var gapOpen int64 = -300
-var gapExtend int64 = -10
+var gapOpen int64 = -600
+var gapExtend int64 = -20
 
 func GoRealignIndels(reads <-chan sam.Sam, ref *fasta.Seeker) <-chan sam.Sam {
 	output := make(chan sam.Sam, 1000)
