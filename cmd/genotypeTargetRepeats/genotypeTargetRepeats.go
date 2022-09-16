@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/dasnellings/MCS_MS/realign"
+	"github.com/guptarohit/asciigraph"
 	"github.com/vertgenlab/gonomics/bed"
 	"github.com/vertgenlab/gonomics/cigar"
 	"github.com/vertgenlab/gonomics/dna"
@@ -11,13 +12,17 @@ import (
 	"github.com/vertgenlab/gonomics/fasta"
 	"github.com/vertgenlab/gonomics/fileio"
 	"github.com/vertgenlab/gonomics/sam"
+	"github.com/vertgenlab/gonomics/vcf"
 	"golang.org/x/exp/slices"
 	"io"
 	"log"
 	"math"
+	"os"
 	"sort"
 	"strings"
 )
+
+var debug int = 0
 
 func usage() {
 	fmt.Print(
@@ -26,65 +31,121 @@ func usage() {
 	flag.PrintDefaults()
 }
 
+// inputFiles is a custom type that gets filled by flag.Parse()
+type inputFiles []string
+
+// String to satisfy flag.Value interface
+func (i *inputFiles) String() string {
+	return strings.Join(*i, " ")
+}
+
+// Set to satisfy flag.Value interface
+func (i *inputFiles) Set(value string) error {
+	*i = append(*i, value)
+	return nil
+}
+
 func main() {
-	var input *string = flag.String("i", "", "Input BAM file with alignments. Must be sorted and indexed.")
+	var inputs inputFiles
+	flag.Var(&inputs, "i", "Input BAM file with alignments. Must be sorted and indexed. Can be declared more than once")
 	var ref *string = flag.String("r", "", "Reference genome. Must be the same reference used for generating the BAM file.")
 	var targets *string = flag.String("t", "", "BED file of targeted repeats. The 4th column must be the sequence of one repeat unit (e.g. CA for a CACACACA repeat), or 'RepeatLen'x'RepeatSeq' (e.g. 10xCA).")
 	var output *string = flag.String("o", "stdout", "Output VCF file.")
-	var bamOut *string = flag.String("bamOut", "", "Output a BAM file with realigned reads. Only outputs reads that inform called genotypes.")
+	var bamOut *string = flag.String("bamOutPfx", "", "Output a BAM file with realigned reads. Only outputs reads that inform called genotypes. File will be name 'bamOutPfx'_'originalFilename'.")
 	var targetPadding *int = flag.Int("tPad", 50, "Add INT bases of padding to either end of regions in targets file for selecting reads for realignment.")
 	var minFlankOverlap *int = flag.Int("minFlank", 4, "A minimum of INT bases must be mapped on either side of the repeat to be considered an enclosing read.")
 	var minMapQ *int = flag.Int("minMapQ", -1, "Minimum mapping quality (before realignment) to be considered for genotyping. Set to -1 for no filter.")
 	var removeDups *bool = flag.Bool("removeDups", true, "Remove duplicate reads when genotyping.")
+	var debugVal *int = flag.Int("debug", 0, "Set to 1 or greater for debug prints.")
+	var minReads *int = flag.Int("minReads", 5, "Minimum total enclosing reads for genotyping.")
 	flag.Parse()
 	flag.Usage = usage
 
-	if *input == "" || *ref == "" {
+	if len(inputs) == 0 || *ref == "" {
 		usage()
 		log.Fatalln("ERROR: must input a VCF file with -i")
 	}
+
+	debug = *debugVal
 
 	if *minMapQ > math.MaxUint8 {
 		log.Fatalf("minMapQ out of range. max: %d\n", math.MaxUint8)
 	}
 
-	genotypeTargetRepeats(*input, *ref, *targets, *output, *bamOut, *targetPadding, *minFlankOverlap, *minMapQ, *removeDups)
+	genotypeTargetRepeats(inputs, *ref, *targets, *output, *bamOut, *targetPadding, *minFlankOverlap, *minMapQ, *minReads, *removeDups)
 }
 
-func genotypeTargetRepeats(inputFile, refFile, targetsFile, outputFile, bamOutFile string, targetPadding, minFlankOverlap int, minMapQ int, removeDups bool) {
+func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile, bamOutPfx string, targetPadding, minFlankOverlap, minMapQ, minReads int, removeDups bool) {
 	var err error
 	ref := fasta.NewSeeker(refFile, "")
-	br, header := sam.OpenBam(inputFile)
-	bamIdx := sam.ReadBai(inputFile + ".bai")
 	targets := bed.Read(targetsFile)
 	vcfOut := fileio.EasyCreate(outputFile)
+	vcfHeader := generateVcfHeader(strings.Join(inputFiles, "\t"))
+	vcf.NewWriteHeader(vcfOut, vcfHeader)
 
-	var bamOutHandle io.WriteCloser
-	var bamOut *sam.BamWriter
-	if bamOutFile != "" {
-		bamOutHandle = fileio.EasyCreate(bamOutFile)
-		bamOut = sam.NewBamWriter(bamOutHandle, header)
+	// get bam reader for each file
+	br := make([]*sam.BamReader, len(inputFiles))
+	headers := make([]sam.Header, len(inputFiles))
+	bamIdxs := make([]sam.Bai, len(inputFiles))
+	for i := range inputFiles {
+		br[i], headers[i] = sam.OpenBam(inputFiles[i])
+		bamIdxs[i] = sam.ReadBai(inputFiles[i] + ".bai")
 	}
 
-	var enclosingReads []*sam.Sam
-	var observedLengths []int
+	bamOutHandle := make([]io.WriteCloser, len(inputFiles))
+	bamOut := make([]*sam.BamWriter, len(inputFiles))
+	if bamOutPfx != "" {
+		for i := range inputFiles {
+			bamOutHandle[i] = fileio.EasyCreate(bamOutPfx + inputFiles[i])
+			bamOut[i] = sam.NewBamWriter(bamOutHandle[i], headers[i])
+		}
+	}
+
+	enclosingReads := make([][]*sam.Sam, len(inputFiles)) // first index is sample
+	observedLengths := make([][]int, len(inputFiles))     // first index is sample
+	var currVcf vcf.Vcf
+	var i int
 	alignerInput := make(chan sam.Sam)
 	alignerOutput := realign.GoRealignIndels(alignerInput, ref)
 	for _, region := range targets {
-		enclosingReads, observedLengths = getLenghtDist(enclosingReads, targetPadding, minMapQ, minFlankOverlap, removeDups, bamIdx, region, br, bamOut, alignerInput, alignerOutput)
-		fmt.Println(region, len(observedLengths), observedLengths)
+		for i = range inputFiles {
+			enclosingReads[i], observedLengths[i] = getLenghtDist(enclosingReads[i], targetPadding, minMapQ, minFlankOverlap, removeDups, bamIdxs[i], region, br[i], bamOut[i], alignerInput, alignerOutput)
+			if bamOutPfx != "" {
+				for j := range enclosingReads {
+					sam.WriteToBamFileHandle(bamOut[i], *enclosingReads[i][j], 0)
+				}
+			}
+			slices.Sort(observedLengths[i])
+		}
+
+		if debug > 0 {
+			fmt.Println(region, len(observedLengths), observedLengths)
+		}
+		if debug > 1 {
+			plot(observedLengths, minReads)
+		}
+		currVcf = callGenotypes(region, minReads, enclosingReads, observedLengths)
+		vcf.WriteVcf(vcfOut, currVcf)
 	}
 	close(alignerInput)
 
+	for i = range inputFiles {
+		err = br[i].Close()
+		exception.PanicOnErr(err)
+		err = bamOut[i].Close()
+		exception.PanicOnErr(err)
+		err = bamOutHandle[i].Close()
+	}
 	err = ref.Close()
-	exception.PanicOnErr(err)
-	err = br.Close()
 	exception.PanicOnErr(err)
 	err = vcfOut.Close()
 	exception.PanicOnErr(err)
-	err = bamOut.Close()
-	exception.PanicOnErr(err)
-	err = bamOutHandle.Close()
+}
+
+func callGenotypes(region bed.Bed, minReads int, enclosingReads [][]*sam.Sam, observedLengths [][]int) vcf.Vcf {
+	var ans vcf.Vcf
+
+	return ans
 }
 
 func getLenghtDist(enclosingReads []*sam.Sam, targetPadding, minMapQ, minFlankOverlap int, removeDups bool, bamIdx sam.Bai, region bed.Bed, br *sam.BamReader, bamOut *sam.BamWriter, alignerInput chan<- sam.Sam, alignerOutput <-chan sam.Sam) ([]*sam.Sam, []int) {
@@ -122,9 +183,6 @@ func getLenghtDist(enclosingReads []*sam.Sam, targetPadding, minMapQ, minFlankOv
 		}
 		if reads[i].GetChromStart() <= region.ChromStart-minFlankOverlap && reads[i].GetChromEnd() >= region.ChromEnd+minFlankOverlap {
 			enclosingReads = append(enclosingReads, &reads[i])
-			if bamOut != nil {
-				sam.WriteToBamFileHandle(bamOut, reads[i], 0)
-			}
 		}
 	}
 
@@ -148,15 +206,19 @@ func getLenghtDist(enclosingReads []*sam.Sam, targetPadding, minMapQ, minFlankOv
 	observedLengths := make([]int, len(enclosingReads))
 	repeatSeq := parseRepeatSeq(region.Name)
 	for i := range enclosingReads {
-		observedLengths[i] = calcRepeatLength(enclosingReads[i], region.ChromStart, repeatSeq)
-		fmt.Println(enclosingReads[i].QName, observedLengths[i], "start:", enclosingReads[i].Pos)
+		observedLengths[i] = calcRepeatLength(enclosingReads[i], region.ChromStart, region.ChromEnd, repeatSeq)
+		if debug > 2 {
+			fmt.Fprintln(os.Stderr, enclosingReads[i].QName, observedLengths[i], "start:", enclosingReads[i].Pos)
+		}
 	}
 	return enclosingReads, observedLengths
 }
 
-func calcRepeatLength(read *sam.Sam, regionStart int, repeatSeq []dna.Base) int {
+func calcRepeatLength(read *sam.Sam, regionStart, regionEnd int, repeatSeq []dna.Base) int {
 	var readIdx, refIdx, i int
 	refIdx = int(read.Pos)
+
+	// get to start of region
 	for i = range read.Cigar {
 		if cigar.ConsumesReference(read.Cigar[i].Op) {
 			refIdx += read.Cigar[i].RunLength
@@ -185,8 +247,9 @@ func calcRepeatLength(read *sam.Sam, regionStart int, repeatSeq []dna.Base) int 
 
 	// move backwards to look for misaligned repeat sequence
 	for read.Seq[readIdx] == repeatSeq[repeatIdx] {
-		repeatIdx -= 1
-		readIdx -= 1
+		repeatIdx--
+		readIdx--
+		refIdx--
 		if repeatIdx == -1 {
 			repeatIdx = len(repeatSeq) - 1
 		}
@@ -199,22 +262,42 @@ func calcRepeatLength(read *sam.Sam, regionStart int, repeatSeq []dna.Base) int 
 		repeatIdx = 0
 	}
 	readIdx++
-
+	refIdx++
 	// move forwards to calc repeat length
-	var observedLength int
-	for read.Seq[readIdx] == repeatSeq[repeatIdx] {
-		observedLength++
-		repeatIdx += 1
-		readIdx += 1
-		if repeatIdx == len(repeatSeq) {
-			repeatIdx = 0
+	var observedLength, maxLength int
+	for refIdx < regionEnd && readIdx < len(read.Seq) {
+		// move through repeat until mismatch
+		for read.Seq[readIdx] == repeatSeq[repeatIdx] {
+			observedLength++
+			repeatIdx++
+			readIdx++
+			refIdx++
+			if repeatIdx == len(repeatSeq) {
+				repeatIdx = 0
+			}
+			if readIdx == len(read.Seq) {
+				break
+			}
 		}
-		if readIdx == len(read.Seq) {
-			break
+		if observedLength > maxLength {
+			maxLength = observedLength
+			observedLength = 0
+		}
+		// move forward until you get a base matching the repeat
+		for readIdx < len(read.Seq) && read.Seq[readIdx] != repeatSeq[repeatIdx] {
+			for repeatIdx = 0; repeatIdx < len(repeatSeq); repeatIdx++ {
+				if read.Seq[readIdx] == repeatSeq[repeatIdx] {
+					break
+				}
+			}
+			if repeatIdx == len(repeatSeq) { // current read base does not match any base in repeat sequence
+				repeatIdx = 0
+				readIdx++
+				refIdx++
+			}
 		}
 	}
-
-	return observedLength
+	return maxLength
 }
 
 func parseRepeatSeq(s string) []dna.Base {
@@ -243,4 +326,41 @@ func resetEnclosingReads(s []*sam.Sam, len int) []*sam.Sam {
 		s = make([]*sam.Sam, 0, len)
 	}
 	return s
+}
+
+func generateVcfHeader(samples string) vcf.Header {
+	var header vcf.Header
+	header.Text = append(header.Text, "##fileformat=VCFv4.2")
+	header.Text = append(header.Text, fmt.Sprintf("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t%s", samples))
+	return header
+}
+
+func plot(observedLengths [][]int, minReads int) {
+	readsPerSample := make([]int, len(observedLengths))
+	p := make([][]float64, len(observedLengths))
+	for i := range observedLengths {
+		p[i] = make([]float64, 100)
+		for j := range observedLengths[i] {
+			p[i][observedLengths[i][j]]++
+			readsPerSample[i]++
+		}
+	}
+	for i := range p {
+		//if readsPerSample[i] < minReads {
+		//	continue
+		//}
+		fmt.Println(asciigraph.Plot(p[i], asciigraph.Height(5), asciigraph.Precision(0), asciigraph.SeriesColors(asciigraph.AnsiColor(i))))
+	}
+	fmt.Println(asciigraph.PlotMany(p, asciigraph.Precision(0), asciigraph.SeriesColors(
+		asciigraph.Red,
+		asciigraph.Yellow,
+		asciigraph.Green,
+		asciigraph.Blue,
+		asciigraph.Cyan,
+		asciigraph.BlueViolet,
+		asciigraph.Brown,
+		asciigraph.Gray,
+		asciigraph.Orange,
+		asciigraph.Olive,
+	), asciigraph.Height(10)))
 }

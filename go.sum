@@ -1,3 +1,5 @@
+github.com/guptarohit/asciigraph v0.5.5 h1:ccFnUF8xYIOUPPY3tmdvRyHqmn1MYI9iv1pLKX+/ZkQ=
+github.com/guptarohit/asciigraph v0.5.5/go.mod h1:dYl5wwK4gNsnFf9Zp+l06rFiDZ5YtXM6x7SRWZ3KGag=
 github.com/vertgenlab/gonomics v0.0.0-20220705164419-2c371aee51ae h1:hY5z0avjiIkPavrE0WQxOEOkaSdE10117wKjOujkiHk=
 github.com/vertgenlab/gonomics v0.0.0-20220705164419-2c371aee51ae/go.mod h1:RaxcRybcD8qdv92oUS+z0eJvjdV7Hg1xg1H7468ptfA=
 github.com/vertgenlab/gonomics v0.0.0-20220912163605-7ab878f99593 h1:1MJbg1/RtZ/OmL7hOc4uCTixnRyeUkAyrCdgfguyyQc=
