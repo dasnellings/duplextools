@@ -371,6 +371,9 @@ func printLengths(a [][]int) string {
 	}
 	s := new(strings.Builder)
 	for i := range a {
+		if len(a[i]) == 0 {
+			continue
+		}
 		s.WriteString(fmt.Sprintf("\t%d", a[i][0]))
 		for j := 1; j < len(a[i]); j++ {
 			s.WriteString(fmt.Sprintf(",%d", a[i][j]))
