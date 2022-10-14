@@ -119,7 +119,7 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 		}
 
 		if debug > 0 {
-			fmt.Println(region, len(observedLengths), observedLengths)
+			fmt.Println(region, len(observedLengths), printLengths(observedLengths))
 		}
 		if debug > 1 {
 			plot(observedLengths, minReads)
@@ -363,4 +363,18 @@ func plot(observedLengths [][]int, minReads int) {
 		asciigraph.Orange,
 		asciigraph.Olive,
 	), asciigraph.Height(10)))
+}
+
+func printLengths(a [][]int) string {
+	if len(a) == 0 {
+		return ""
+	}
+	s := new(strings.Builder)
+	for i := range a {
+		s.WriteString(fmt.Sprintf("\t%d", a[i][0]))
+		for j := 1; j < len(a[i]); j++ {
+			s.WriteString(fmt.Sprintf(",%d", a[i][j]))
+		}
+	}
+	return s.String()
 }
