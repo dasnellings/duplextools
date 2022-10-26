@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/dasnellings/MCS_MS/gmm"
 	"github.com/dasnellings/MCS_MS/realign"
 	"github.com/guptarohit/asciigraph"
 	"github.com/vertgenlab/gonomics/bed"
@@ -107,6 +108,10 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 	var i int
 	alignerInput := make(chan sam.Sam)
 	alignerOutput := realign.GoRealignIndels(alignerInput, ref)
+	mm := new(gmm.MixtureModel)
+	gaussians := make([][]float64, 2)
+	var floatSlice []float64
+	var converged bool
 	for _, region := range targets {
 		for i = range inputFiles {
 			enclosingReads[i], observedLengths[i] = getLenghtDist(enclosingReads[i], targetPadding, minMapQ, minFlankOverlap, removeDups, bamIdxs[i], region, br[i], bamOut[i], alignerInput, alignerOutput)
@@ -118,11 +123,20 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 			slices.Sort(observedLengths[i])
 		}
 
+		// TODO add idx for bulk sample
+		converged = runMixtureModel(observedLengths[0], mm, &floatSlice)
+		if !converged {
+			continue
+		}
+		gaussians[0] = gaussianHist(mm.Weights[0], mm.Means[0], mm.Stdev[0])
+		gaussians[1] = gaussianHist(mm.Weights[1], mm.Means[1], mm.Stdev[1])
+
 		if debug > 0 {
 			fmt.Println(region, len(observedLengths), printLengths(observedLengths))
+			fmt.Println(mm.Means)
 		}
 		if debug > 1 {
-			plot(observedLengths, minReads)
+			plot(observedLengths, minReads, gaussians)
 		}
 		currVcf = callGenotypes(region, minReads, enclosingReads, observedLengths)
 		vcf.WriteVcf(vcfOut, currVcf)
@@ -335,7 +349,7 @@ func generateVcfHeader(samples string) vcf.Header {
 	return header
 }
 
-func plot(observedLengths [][]int, minReads int) {
+func plot(observedLengths [][]int, minReads int, gaussians [][]float64) {
 	readsPerSample := make([]int, len(observedLengths))
 	p := make([][]float64, len(observedLengths))
 	for i := range observedLengths {
@@ -345,13 +359,7 @@ func plot(observedLengths [][]int, minReads int) {
 			readsPerSample[i]++
 		}
 	}
-	for i := range p {
-		//if readsPerSample[i] < minReads {
-		//	continue
-		//}
-		fmt.Println(asciigraph.Plot(p[i], asciigraph.Height(5), asciigraph.Precision(0), asciigraph.SeriesColors(asciigraph.AnsiColor(i))))
-	}
-	fmt.Println(asciigraph.PlotMany(p, asciigraph.Precision(0), asciigraph.SeriesColors(
+	fmt.Println(asciigraph.PlotMany(gaussians, asciigraph.Precision(0), asciigraph.SeriesColors(
 		asciigraph.Red,
 		asciigraph.Yellow,
 		asciigraph.Green,
@@ -363,6 +371,43 @@ func plot(observedLengths [][]int, minReads int) {
 		asciigraph.Orange,
 		asciigraph.Olive,
 	), asciigraph.Height(10)))
+
+	for i := range p {
+		//if readsPerSample[i] < minReads {
+		//	continue
+		//}
+		if i != 0 {
+			continue
+		}
+		fmt.Println(asciigraph.Plot(p[i], asciigraph.Height(5), asciigraph.Precision(0), asciigraph.SeriesColors(asciigraph.AnsiColor(i))))
+	}
+
+	//fmt.Println(asciigraph.PlotMany(p, asciigraph.Precision(0), asciigraph.SeriesColors(
+	//	asciigraph.Red,
+	//	asciigraph.Yellow,
+	//	asciigraph.Green,
+	//	asciigraph.Blue,
+	//	asciigraph.Cyan,
+	//	asciigraph.BlueViolet,
+	//	asciigraph.Brown,
+	//	asciigraph.Gray,
+	//	asciigraph.Orange,
+	//	asciigraph.Olive,
+	//), asciigraph.Height(10)))
+}
+
+func gaussianHist(weight, mean, stdev float64) []float64 {
+	y := make([]float64, 100)
+	for x := range y {
+		y[x] = gaussianY(float64(x), weight, mean, stdev)
+	}
+	return y
+}
+
+func gaussianY(x, a, b, c float64) float64 {
+	top := math.Pow(x-b, 2)
+	bot := 2 * c * c
+	return a * math.Exp(-top/bot)
 }
 
 func printLengths(a [][]int) string {
@@ -380,4 +425,18 @@ func printLengths(a [][]int) string {
 		}
 	}
 	return s.String()
+}
+
+func runMixtureModel(data []int, mm *gmm.MixtureModel, f *[]float64) bool {
+	if cap(*f) >= len(data) {
+		*f = (*f)[0:len(data)]
+	} else {
+		*f = make([]float64, len(data))
+	}
+
+	for i := range data {
+		(*f)[i] = float64(data[i])
+	}
+	converged, _ := gmm.RunMixtureModel(*f, 2, 50, 50, mm)
+	return converged
 }
