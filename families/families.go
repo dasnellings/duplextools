@@ -13,12 +13,13 @@ func GoAnnotate(reads <-chan sam.Sam, startTolerance int, posMatching bool) <-ch
 }
 
 type family struct {
-	chr           string
-	start         int
-	mateStart     int
-	altMateStarts []int
-	end           int
-	familyId      uint
+	chr            string
+	start          int
+	mateStart      int
+	altMateStarts  []int
+	end            int
+	familyId       uint
+	watsonStrandId string
 }
 
 func annotate(in <-chan sam.Sam, out chan<- sam.Sam, startTolerance int, posMatching bool) {
@@ -26,15 +27,19 @@ func annotate(in <-chan sam.Sam, out chan<- sam.Sam, startTolerance int, posMatc
 	var currFamilyId uint
 	var id string
 	var currFam, prevFam, fam *family
+	var bf, br string
 	currFam = new(family)
 	prevFam = new(family)
 	for r := range in {
-		id = getId(barcode.Get(r))
+		bf, br = barcode.Get(r)
+		id = getId(bf, br)
 		if id == "" {
 			out <- r
 			continue
 		}
 
+		// retrieve family else make a new one.
+		// store previous family for efficiency.
 		fam = m[id]
 		if fam != currFam {
 			if currFam.familyId != 0 {
@@ -47,6 +52,14 @@ func annotate(in <-chan sam.Sam, out chan<- sam.Sam, startTolerance int, posMatc
 			currFam = new(family)
 			m[id] = currFam
 		}
+
+		// arbitrarily choose first fwd BC as watson strand
+		if currFam.watsonStrandId == "" {
+			currFam.watsonStrandId = bf
+		}
+
+		// add strand tag
+		addStrandTag(&r, bf == currFam.watsonStrandId)
 
 		switch {
 		case posMatching && r.RName == currFam.chr && (r.GetChromStart() == currFam.start || r.GetChromEnd() == currFam.end || int(r.PNext) == currFam.start || r.GetChromStart() == currFam.mateStart): // start/end match, probably part of existing family
@@ -106,9 +119,22 @@ func getId(a, b string) string {
 }
 
 func addFamilyTag(s *sam.Sam, famId uint) {
-	sam.ParseExtra(s)
+	//sam.ParseExtra(s)
 	if s.Extra != "" {
 		s.Extra += "\t"
 	}
 	s.Extra += fmt.Sprintf("RF:Z:%d", famId)
+}
+
+func addStrandTag(s *sam.Sam, watsonStrand bool) {
+	sam.ParseExtra(s)
+	if s.Extra != "" {
+		s.Extra += "\t"
+	}
+
+	if watsonStrand {
+		s.Extra += fmt.Sprintf("RS:Z:W") // watson
+	} else {
+		s.Extra += fmt.Sprintf("RS:Z:C") // crick
+	}
 }

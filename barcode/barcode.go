@@ -78,6 +78,22 @@ func Get(s sam.Sam) (forward, reverse string) {
 	return
 }
 
+func GetRF(r *sam.Sam) string {
+	idx := strings.Index(r.Extra, "RF:Z:")
+	if idx == -1 {
+		return ""
+	}
+	return r.Extra[idx+5:]
+}
+
+func GetRS(r *sam.Sam) byte {
+	idx := strings.Index(r.Extra, "RS:Z:")
+	if idx == -1 {
+		return 0
+	}
+	return r.Extra[idx+5]
+}
+
 func Trim(fq *fastq.Fastq) {
 	s := dna.BasesToString(fq.Seq)
 	templateStart := strings.LastIndex(s, McsSharedSequence) + len(McsSharedSequence)

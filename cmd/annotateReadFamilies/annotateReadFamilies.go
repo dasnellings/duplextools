@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/dasnellings/MCS_MS/barcode"
 	"github.com/dasnellings/MCS_MS/families"
 	"github.com/vertgenlab/gonomics/exception"
 	"github.com/vertgenlab/gonomics/fileio"
@@ -10,7 +11,6 @@ import (
 	"io"
 	"log"
 	"sort"
-	"strings"
 )
 
 func usage() {
@@ -39,11 +39,13 @@ func main() {
 }
 
 type minimalBed struct {
-	chr    string
-	start  int
-	end    int
-	family string
-	count  int
+	chr         string
+	start       int
+	end         int
+	family      string
+	count       int
+	countWatson int
+	countCrick  int
 }
 
 func annotateReadFamilies(input, output string, tolerance int, strict bool, bed string, minMapQ uint8) {
@@ -61,6 +63,7 @@ func annotateReadFamilies(input, output string, tolerance int, strict bool, bed 
 	var bedOut io.WriteCloser
 	m := make(map[string]*minimalBed)
 	var rf string
+	var rs byte
 	var mb *minimalBed
 	if bed != "" {
 		bedOut = fileio.EasyCreate(bed)
@@ -101,12 +104,12 @@ func annotateReadFamilies(input, output string, tolerance int, strict bool, bed 
 				}
 			})
 			for _, b := range bedToWrite {
-				fmt.Fprintf(bedOut, "%s\t%d\t%d\t%s\t%d\n", b.chr, b.start, b.end, b.family, b.count)
+				fmt.Fprintf(bedOut, "%s\t%d\t%d\t%s\t0\t+\t%d\t%d\n", b.chr, b.start, b.end, b.family, b.countWatson, b.countCrick)
 			}
 			bedToWrite = bedToWrite[:0]
 		}
 
-		rf = getRF(&r)
+		rf = barcode.GetRF(&r)
 		mb = m[rf]
 		if mb == nil {
 			mb = new(minimalBed)
@@ -120,7 +123,15 @@ func annotateReadFamilies(input, output string, tolerance int, strict bool, bed 
 		if mb.end < r.GetChromEnd() {
 			mb.end = r.GetChromEnd()
 		}
-		mb.count++
+
+		// get read strand, returns true if watson
+		rs = barcode.GetRS(&r)
+		if rs == 'W' { // watson
+			mb.countWatson++
+		} else if rs == 'C' { // crick
+			mb.countCrick++
+		}
+
 		prevChrom = r.RName
 
 		if readCount%10000 == 0 { // write every 10000 reads
@@ -147,7 +158,7 @@ func annotateReadFamilies(input, output string, tolerance int, strict bool, bed 
 				}
 			})
 			for _, b := range bedToWrite {
-				fmt.Fprintf(bedOut, "%s\t%d\t%d\t%s\t%d\n", b.chr, b.start, b.end, b.family, b.count)
+				fmt.Fprintf(bedOut, "%s\t%d\t%d\t%s\t0\t+\t%d\t%d\n", b.chr, b.start, b.end, b.family, b.countWatson, b.countCrick)
 			}
 			bedToWrite = bedToWrite[:0]
 		}
@@ -175,7 +186,7 @@ func annotateReadFamilies(input, output string, tolerance int, strict bool, bed 
 			}
 		})
 		for _, b := range bedToWrite {
-			fmt.Fprintf(bedOut, "%s\t%d\t%d\t%s\t%d\n", b.chr, b.start, b.end, b.family, b.count)
+			fmt.Fprintf(bedOut, "%s\t%d\t%d\t%s\t0\t+\t%d\t%d\n", b.chr, b.start, b.end, b.family, b.countWatson, b.countCrick)
 		}
 		err = bedOut.Close()
 		exception.PanicOnErr(err)
@@ -185,12 +196,4 @@ func annotateReadFamilies(input, output string, tolerance int, strict bool, bed 
 	exception.PanicOnErr(err)
 	err = out.Close()
 	exception.PanicOnErr(err)
-}
-
-func getRF(r *sam.Sam) string {
-	idx := strings.Index(r.Extra, "RF:Z:")
-	if idx == -1 {
-		return ""
-	}
-	return r.Extra[idx+5:]
 }
