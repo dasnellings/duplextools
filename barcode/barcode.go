@@ -97,12 +97,9 @@ func GetRS(r *sam.Sam) byte {
 func Trim(fq *fastq.Fastq) {
 	s := dna.BasesToString(fq.Seq)
 	templateStart := strings.LastIndex(s, McsSharedSequence) + len(McsSharedSequence)
-	templateEnd := strings.Index(s, McsSharedSequenceRevComp)
+	templateEnd := getEndTrimIndex(s)
 	if templateStart == -1 {
 		templateStart = 0
-	}
-	if templateEnd == -1 {
-		templateEnd = len(s)
 	}
 
 	if templateStart > templateEnd {
@@ -265,4 +262,21 @@ func minLevenshtein() int {
 	}
 	fmt.Println("Min:", min)
 	return min
+}
+
+func getEndTrimIndex(s string) int {
+	templateEnd := strings.Index(s, McsSharedSequenceRevComp)
+	if templateEnd != -1 {
+		return templateEnd
+	}
+
+	for i := len(s) - len(McsSharedSequenceRevComp); i < len(s) && i >= 0; i++ {
+		if s[i] == McsSharedSequenceRevComp[0] {
+			if strings.HasPrefix(McsSharedSequenceRevComp, s[i:]) {
+				return i
+			}
+		}
+	}
+
+	return len(s)
 }

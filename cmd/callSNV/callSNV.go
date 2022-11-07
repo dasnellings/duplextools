@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"github.com/dasnellings/MCS_MS/barcode"
 	"github.com/vertgenlab/gonomics/bed"
+	"github.com/vertgenlab/gonomics/dna"
 	"github.com/vertgenlab/gonomics/exception"
 	"github.com/vertgenlab/gonomics/fasta"
 	"github.com/vertgenlab/gonomics/fileio"
 	"github.com/vertgenlab/gonomics/sam"
 	"log"
+	"sort"
 	"strconv"
 )
 
@@ -62,7 +64,7 @@ func callSNV(input, output, ref, bedFile string, minMapQ uint8, minTotalDepth, m
 		if watsonDepth < minStrandedDepth || crickDepth < minStrandedDepth {
 			continue
 		}
-		callFamily(b, bamReader, bamHeader, bai, minMapQ)
+		callFamily(b, bamReader, bamHeader, faSeeker, bai, minMapQ)
 	}
 
 	err = bamReader.Close()
@@ -73,15 +75,14 @@ func callSNV(input, output, ref, bedFile string, minMapQ uint8, minTotalDepth, m
 	exception.PanicOnErr(err)
 }
 
-func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, bai sam.Bai, minMapQ uint8) {
+func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker *fasta.Seeker, bai sam.Bai, minMapQ uint8) {
 	var reads []sam.Sam
 	var famId string
 	var strand byte
+	var err error
 	reads = sam.SeekBamRegion(bamReader, bai, b.Chrom, uint32(b.ChromStart), uint32(b.ChromEnd))
-	fmt.Println("total reads:", len(reads))
 	watsonReads := make([]sam.Sam, 0, len(reads))
 	crickReads := make([]sam.Sam, 0, len(reads))
-
 	for i := range reads {
 		if reads[i].MapQ < minMapQ {
 			continue
@@ -92,8 +93,6 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, bai sam.
 			continue
 		}
 		strand = barcode.GetRS(&reads[i])
-		fmt.Println(reads[i].Extra)
-		fmt.Println(famId, b.Name, strand)
 		if strand == 'W' {
 			watsonReads = append(watsonReads, reads[i])
 		} else if strand == 'C' {
@@ -101,14 +100,65 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, bai sam.
 		}
 	}
 
+	sort.Slice(watsonReads, func(i, j int) bool {
+		return watsonReads[i].Pos < watsonReads[j].Pos
+	})
+	sort.Slice(crickReads, func(i, j int) bool {
+		return crickReads[i].Pos < crickReads[j].Pos
+	})
+
 	watsonPiles := pileup(watsonReads, header, b.ChromStart, b.ChromEnd)
 	crickPiles := pileup(crickReads, header, b.ChromStart, b.ChromEnd)
 
-	fmt.Println(b)
-	fmt.Println(len(watsonReads))
-	fmt.Println(len(crickReads))
-	fmt.Println(len(watsonPiles))
-	fmt.Println(len(crickPiles))
+	var putativeWatsonPiles, putativeCrickPiles []sam.Pile
+	var watsonPileIdx, crickPileIdx int
+	var maxWatsonBase, maxCrickBase dna.Base
+	var refBase []dna.Base
+	for {
+		if watsonPileIdx == len(watsonPiles) || crickPileIdx == len(crickPiles) {
+			break
+		}
+		if crickPiles[crickPileIdx].Pos > watsonPiles[watsonPileIdx].Pos {
+			watsonPileIdx++
+			continue
+		}
+		if crickPiles[crickPileIdx].Pos < watsonPiles[watsonPileIdx].Pos {
+			crickPileIdx++
+			continue
+		}
+
+		// matching ref position
+		maxWatsonBase = maxBase(watsonPiles[watsonPileIdx])
+		maxCrickBase = maxBase(crickPiles[crickPileIdx])
+
+		if maxWatsonBase != maxCrickBase {
+			watsonPileIdx++
+			crickPileIdx++
+			continue
+		}
+		refBase, err = fasta.SeekByName(faSeeker, header.Chroms[watsonPiles[watsonPileIdx].RefIdx].Name, int(watsonPiles[watsonPileIdx].Pos-1), int(watsonPiles[watsonPileIdx].Pos))
+		dna.AllToUpper(refBase)
+		exception.PanicOnErr(err)
+
+		if maxWatsonBase == refBase[0] {
+			watsonPileIdx++
+			crickPileIdx++
+			continue
+		}
+
+		putativeWatsonPiles = append(putativeWatsonPiles, watsonPiles[watsonPileIdx])
+		putativeCrickPiles = append(putativeCrickPiles, crickPiles[crickPileIdx])
+
+		fmt.Println(header.Chroms[watsonPiles[watsonPileIdx].RefIdx].Name, int(watsonPiles[watsonPileIdx].Pos), dna.BasesToString(refBase), string(dna.BaseToRune(maxWatsonBase)))
+		fmt.Println("WF", watsonPiles[watsonPileIdx].CountF)
+		fmt.Println("WR", watsonPiles[watsonPileIdx].CountR)
+		fmt.Println("CF", crickPiles[crickPileIdx].CountF)
+		fmt.Println("CR", crickPiles[crickPileIdx].CountR)
+
+		watsonPileIdx++
+		crickPileIdx++
+	}
+	fmt.Println("Finished", b.Chrom, b.ChromStart, b.ChromEnd)
 }
 
 func pileup(reads []sam.Sam, header sam.Header, refStart, refEnd int) []sam.Pile {
@@ -120,11 +170,22 @@ func pileup(reads []sam.Sam, header sam.Header, refStart, refEnd int) []sam.Pile
 	for i := range reads {
 		samChan <- reads[i]
 	}
+	close(samChan)
 
 	ans := make([]sam.Pile, 0, refEnd-refStart)
-	pileChan := sam.GoPileup(samChan, header, true, nil, nil)
+	pileChan := sam.GoPileup(samChan, header, false, nil, nil)
 	for p := range pileChan {
 		ans = append(ans, p)
 	}
 	return ans
+}
+
+func maxBase(p sam.Pile) dna.Base {
+	var max dna.Base = 0
+	for i := 1; i < len(p.CountF); i++ {
+		if p.CountF[i]+p.CountR[i] > p.CountF[max]+p.CountR[max] {
+			max = dna.Base(i)
+		}
+	}
+	return max
 }
