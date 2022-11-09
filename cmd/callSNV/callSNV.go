@@ -38,6 +38,7 @@ func main() {
 	totalDepth := flag.Int("a", 4, "Minimum total depth of read family for variant consideration.")
 	strandedDepth := flag.Int("s", 2, "Minimum depth of independent watson and crick strands for variant consideration")
 	minMapQ := flag.Int("minMapQ", 20, "Minimum mapping quality.")
+	minAf := flag.Float64("minAF", 0.51, "Minimum fraction of reads with alternate allele **Within a read family and within strand** to be considered a variant.")
 	debugLevel := flag.Int("verbose", 0, "Level of verbosity in log.")
 	flag.Parse()
 
@@ -62,7 +63,7 @@ func main() {
 		log.Fatal("ERROR: -s * 2 should not be larger than -a")
 	}
 
-	callSNV(*input, *output, *ref, *bedFile, uint8(*minMapQ), *totalDepth, *strandedDepth, *debugLevel)
+	callSNV(*input, *output, *ref, *bedFile, uint8(*minMapQ), *totalDepth, *strandedDepth, *minAf, *debugLevel)
 
 	if *memprofile != "" {
 		f, err := os.Create(*memprofile)
@@ -77,7 +78,7 @@ func main() {
 	}
 }
 
-func callSNV(input, output, ref, bedFile string, minMapQ uint8, minTotalDepth, minStrandedDepth, debugLevel int) {
+func callSNV(input, output, ref, bedFile string, minMapQ uint8, minTotalDepth, minStrandedDepth int, minAf float64, debugLevel int) {
 	bamReader, bamHeader := sam.OpenBam(input)
 	bai := sam.ReadBai(input + ".bai")
 	vcfOut := fileio.EasyCreate(output)
@@ -98,7 +99,7 @@ func callSNV(input, output, ref, bedFile string, minMapQ uint8, minTotalDepth, m
 		if watsonDepth < minStrandedDepth || crickDepth < minStrandedDepth {
 			continue
 		}
-		familyVariants = callFamily(b, bamReader, bamHeader, faSeeker, bai, minMapQ)
+		familyVariants = callFamily(b, bamReader, bamHeader, faSeeker, bai, minMapQ, watsonDepth, crickDepth, minAf, minTotalDepth, minStrandedDepth)
 		vcf.WriteVcfToFileHandle(vcfOut, familyVariants)
 		if debugLevel > 0 {
 			log.Println("Finished Read Family:", b)
@@ -113,7 +114,7 @@ func callSNV(input, output, ref, bedFile string, minMapQ uint8, minTotalDepth, m
 	exception.PanicOnErr(err)
 }
 
-func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker *fasta.Seeker, bai sam.Bai, minMapQ uint8) []vcf.Vcf {
+func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker *fasta.Seeker, bai sam.Bai, minMapQ uint8, expectedWatsonDepth, expectedCrickDepth int, minAf float64, minTotalDepth, minStrandedDepth int) []vcf.Vcf {
 	var reads []sam.Sam
 	var famId string
 	var strand byte
@@ -144,8 +145,16 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker
 	sort.Slice(crickReads, func(i, j int) bool {
 		return crickReads[i].Pos < crickReads[j].Pos
 	})
+
 	watsonPiles := pileup(watsonReads, header)
 	crickPiles := pileup(crickReads, header)
+
+	if len(watsonReads) != expectedWatsonDepth || len(crickReads) != expectedCrickDepth {
+		log.Printf("WARNING: mismatch in expected and actual number of reads at\n%s\n", b)
+	}
+
+	// remove piles that fall outside the consensus start/end of the read families
+	watsonPiles, crickPiles = removePositionalOutliers(watsonPiles, crickPiles, watsonReads, crickReads)
 
 	var variants []vcf.Vcf
 	var watsonPileIdx, crickPileIdx, watsonDelLen, crickDelLen int
@@ -153,6 +162,7 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker
 	var maxWatsonBase, maxCrickBase dna.Base
 	var refBase []dna.Base
 	var watsonVarType, crickVarType variantType
+	var watsonAltAlleleCount, crickAltAlleleCount, watsonInsAlleleCount, crickInsAlleleCount int
 	for { // pos matching between slices of watson and crick piles
 		if watsonPileIdx == len(watsonPiles) || crickPileIdx == len(crickPiles) {
 			break
@@ -167,17 +177,40 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker
 		}
 
 		// matching ref position
-		watsonVarType, maxWatsonBase, watsonInsSeq, watsonDelLen = maxBase(watsonPiles[watsonPileIdx])
-		crickVarType, maxCrickBase, crickInsSeq, crickDelLen = maxBase(crickPiles[crickPileIdx])
+		watsonVarType, maxWatsonBase, watsonInsSeq, watsonDelLen, watsonAltAlleleCount, watsonInsAlleleCount = maxBase(watsonPiles[watsonPileIdx])
+		crickVarType, maxCrickBase, crickInsSeq, crickDelLen, crickAltAlleleCount, crickInsAlleleCount = maxBase(crickPiles[crickPileIdx])
 
+		// special case to bias towards insertions since they are assigned to the position before the insertion
+		if float64(watsonInsAlleleCount)/float64(len(watsonReads)/2) > minAf || float64(crickInsAlleleCount)/float64(len(crickReads)/2) > minAf {
+			watsonVarType = insertion
+			crickVarType = insertion
+			watsonAltAlleleCount = watsonInsAlleleCount
+			crickAltAlleleCount = crickInsAlleleCount
+		}
+
+		// exclude if watson and crick do not agree
 		if watsonVarType != crickVarType {
 			watsonPileIdx++
 			crickPileIdx++
 			continue
 		}
 
-		chr = header.Chroms[watsonPiles[watsonPileIdx].RefIdx].Name
+		// exclude if watson or crick AF is less than threshold. divide by 2 for fwd/reverse reads.
+		if float64(watsonAltAlleleCount)/float64(len(watsonReads)/2) < minAf || float64(crickAltAlleleCount)/float64(len(crickReads)/2) < minAf {
+			watsonPileIdx++
+			crickPileIdx++
+			continue
+		}
 
+		// exclude if below minimum read depth
+		if watsonAltAlleleCount < minStrandedDepth || crickAltAlleleCount < minStrandedDepth || watsonAltAlleleCount+crickAltAlleleCount < minTotalDepth {
+			watsonPileIdx++
+			crickPileIdx++
+			continue
+		}
+
+		// variant-type specific filters and processing
+		chr = header.Chroms[watsonPiles[watsonPileIdx].RefIdx].Name
 		switch watsonVarType {
 		case snv:
 			if maxWatsonBase != maxCrickBase {
@@ -186,7 +219,7 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker
 				continue
 			}
 
-			refBase, err = fasta.SeekByName(faSeeker, header.Chroms[watsonPiles[watsonPileIdx].RefIdx].Name, int(watsonPiles[watsonPileIdx].Pos-1), int(watsonPiles[watsonPileIdx].Pos))
+			refBase, err = fasta.SeekByName(faSeeker, chr, int(watsonPiles[watsonPileIdx].Pos-1), int(watsonPiles[watsonPileIdx].Pos))
 			dna.AllToUpper(refBase)
 			exception.PanicOnErr(err)
 
@@ -248,11 +281,11 @@ const (
 	none
 )
 
-func maxBase(p sam.Pile) (tp variantType, snvAltBase dna.Base, insSeq string, delLen int) {
-	var maxSnvCount, maxInsCount, maxDelCount int
+func maxBase(p sam.Pile) (tp variantType, snvAltBase dna.Base, insSeq string, delLen int, altAlleleCount, maxInsCount int) {
+	var maxSnvCount, maxDelCount int
 
 	// check SNV
-	for i := 1; i < len(p.CountF); i++ {
+	for i := 0; i < len(p.CountF); i++ {
 		if i == int(dna.Gap) { // deletions handled below
 			continue
 		}
@@ -297,16 +330,19 @@ func maxBase(p sam.Pile) (tp variantType, snvAltBase dna.Base, insSeq string, de
 	// score and return winner
 	if maxSnvCount > maxInsCount && maxSnvCount > maxDelCount {
 		tp = snv
+		altAlleleCount = maxSnvCount
 		return
 	}
 
 	if maxInsCount > maxDelCount {
 		tp = insertion
+		altAlleleCount = maxInsCount
 		return
 	}
 
 	if delLen > 0 {
 		tp = deletion
+		altAlleleCount = maxDelCount
 		return
 	}
 
@@ -326,7 +362,7 @@ func snvToVcf(watsonPile, crickPile sam.Pile, chr string, refBase, altBase dna.B
 	v.Format = []string{"GT", "DP", "WS", "CS", "RF"}
 
 	var totalDepth, watsonDepth, crickDepth string
-	totalDepth = fmt.Sprint(watsonPile.CountF[altBase] + watsonPile.CountR[altBase] + crickPile.CountF[altBase] + crickPile.CountR[altBase])
+	totalDepth = fmt.Sprint(calcDepth(watsonPile) + calcDepth(crickPile))
 	watsonDepth = fmt.Sprint(watsonPile.CountF[altBase] + watsonPile.CountR[altBase])
 	crickDepth = fmt.Sprint(crickPile.CountF[altBase] + crickPile.CountR[altBase])
 
@@ -353,7 +389,7 @@ func insToVcf(watsonPile, crickPile sam.Pile, chr string, insSeq string, faSeeke
 	v.Format = []string{"GT", "DP", "WS", "CS", "RF"}
 
 	var totalDepth, watsonDepth, crickDepth string
-	totalDepth = fmt.Sprint(watsonPile.InsCountF[insSeq] + watsonPile.InsCountR[insSeq] + crickPile.InsCountF[insSeq] + crickPile.InsCountR[insSeq])
+	totalDepth = fmt.Sprint(calcDepth(watsonPile) + calcDepth(crickPile))
 	watsonDepth = fmt.Sprint(watsonPile.InsCountF[insSeq] + watsonPile.InsCountR[insSeq])
 	crickDepth = fmt.Sprint(crickPile.InsCountF[insSeq] + crickPile.InsCountR[insSeq])
 
@@ -380,7 +416,7 @@ func delToVcf(watsonPile, crickPile sam.Pile, chr string, delLen int, faSeeker *
 	v.Format = []string{"GT", "DP", "WS", "CS", "RF"}
 
 	var totalDepth, watsonDepth, crickDepth string
-	totalDepth = fmt.Sprint(watsonPile.DelCountF[delLen] + watsonPile.DelCountR[delLen] + crickPile.DelCountF[delLen] + crickPile.DelCountR[delLen])
+	totalDepth = fmt.Sprint(calcDepth(watsonPile) + calcDepth(crickPile))
 	watsonDepth = fmt.Sprint(watsonPile.DelCountF[delLen] + watsonPile.DelCountR[delLen])
 	crickDepth = fmt.Sprint(crickPile.DelCountF[delLen] + crickPile.DelCountR[delLen])
 
@@ -401,4 +437,87 @@ func makeVcfHeader(infile string, referenceFile string) vcf.Header {
 	header.Text = append(header.Text, "##FORMAT=<ID=RF,Number=1,Type=Integer,Description=\"Read Family Identifier\">")
 	header.Text = append(header.Text, fmt.Sprintf("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t%s", strings.TrimSuffix(infile, ".bam")))
 	return header
+}
+
+func removePositionalOutliers(watsonPiles, crickPiles []sam.Pile, watsonReads, crickReads []sam.Sam) (filteredWatsonPiles, filteredCrickPiles []sam.Pile) {
+	filteredWatsonPiles = make([]sam.Pile, 0, len(watsonPiles))
+	filteredCrickPiles = make([]sam.Pile, 0, len(crickPiles))
+
+	fwdStartMap := make(map[int]int)
+	fwdEndMap := make(map[int]int)
+	revStartMap := make(map[int]int)
+	revEndMap := make(map[int]int)
+
+	for i := range watsonReads {
+		if sam.IsPosStrand(watsonReads[i]) {
+			fwdStartMap[watsonReads[i].GetChromStart()]++
+			fwdEndMap[watsonReads[i].GetChromEnd()]++
+		} else {
+			revStartMap[watsonReads[i].GetChromStart()]++
+			revEndMap[watsonReads[i].GetChromEnd()]++
+		}
+	}
+	for i := range crickReads {
+		if sam.IsPosStrand(crickReads[i]) {
+			fwdStartMap[crickReads[i].GetChromStart()]++
+			fwdEndMap[crickReads[i].GetChromEnd()]++
+		} else {
+			revStartMap[crickReads[i].GetChromStart()]++
+			revEndMap[crickReads[i].GetChromEnd()]++
+		}
+	}
+
+	var fwdStart, fwdEnd, revStart, revEnd, maxCount int
+	for key, val := range fwdStartMap {
+		if val > maxCount {
+			fwdStart = key
+		}
+	}
+	for key, val := range fwdEndMap {
+		if val > maxCount {
+			fwdEnd = key
+		}
+	}
+	for key, val := range revStartMap {
+		if val > maxCount {
+			revStart = key
+		}
+	}
+	for key, val := range revEndMap {
+		if val > maxCount {
+			revEnd = key
+		}
+	}
+
+	for i := range watsonPiles {
+		if (int(watsonPiles[i].Pos) > fwdStart && int(watsonPiles[i].Pos) < fwdEnd) ||
+			(int(watsonPiles[i].Pos) > revStart && int(watsonPiles[i].Pos) < revEnd) {
+			filteredWatsonPiles = append(filteredWatsonPiles, watsonPiles[i])
+		}
+	}
+
+	for i := range crickPiles {
+		if (int(crickPiles[i].Pos) > fwdStart && int(crickPiles[i].Pos) < fwdEnd) ||
+			(int(crickPiles[i].Pos) > revStart && int(crickPiles[i].Pos) < revEnd) {
+			filteredCrickPiles = append(filteredCrickPiles, crickPiles[i])
+		}
+	}
+
+	return
+}
+
+// calcDepth returns the number of reads in the input pile
+func calcDepth(s sam.Pile) int {
+	var depth int
+	for i := range s.CountF {
+		depth += s.CountF[i] + s.CountR[i]
+	}
+	for _, val := range s.InsCountF {
+		depth += val
+	}
+	for _, val := range s.InsCountR {
+		depth += val
+	}
+	// Note that DelCount does NOT count towards depth
+	return depth
 }
