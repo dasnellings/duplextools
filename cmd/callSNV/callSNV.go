@@ -38,6 +38,7 @@ func main() {
 	totalDepth := flag.Int("a", 4, "Minimum total depth of read family for variant consideration.")
 	strandedDepth := flag.Int("s", 2, "Minimum depth of independent watson and crick strands for variant consideration")
 	minMapQ := flag.Int("minMapQ", 20, "Minimum mapping quality.")
+	debugLevel := flag.Int("verbose", 0, "Level of verbosity in log.")
 	flag.Parse()
 
 	if *cpuprofile != "" {
@@ -61,7 +62,7 @@ func main() {
 		log.Fatal("ERROR: -s * 2 should not be larger than -a")
 	}
 
-	callSNV(*input, *output, *ref, *bedFile, uint8(*minMapQ), *totalDepth, *strandedDepth)
+	callSNV(*input, *output, *ref, *bedFile, uint8(*minMapQ), *totalDepth, *strandedDepth, *debugLevel)
 
 	if *memprofile != "" {
 		f, err := os.Create(*memprofile)
@@ -76,7 +77,7 @@ func main() {
 	}
 }
 
-func callSNV(input, output, ref, bedFile string, minMapQ uint8, minTotalDepth, minStrandedDepth int) {
+func callSNV(input, output, ref, bedFile string, minMapQ uint8, minTotalDepth, minStrandedDepth, debugLevel int) {
 	bamReader, bamHeader := sam.OpenBam(input)
 	bai := sam.ReadBai(input + ".bai")
 	vcfOut := fileio.EasyCreate(output)
@@ -99,7 +100,9 @@ func callSNV(input, output, ref, bedFile string, minMapQ uint8, minTotalDepth, m
 		}
 		familyVariants = callFamily(b, bamReader, bamHeader, faSeeker, bai, minMapQ)
 		vcf.WriteVcfToFileHandle(vcfOut, familyVariants)
-		log.Println("Finished Read Family:", b)
+		if debugLevel > 0 {
+			log.Println("Finished Read Family:", b)
+		}
 	}
 
 	err = bamReader.Close()
@@ -214,7 +217,6 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker
 		watsonPileIdx++
 		crickPileIdx++
 	}
-
 	return variants
 }
 
