@@ -22,7 +22,7 @@ import (
 
 func usage() {
 	fmt.Print(
-		"callSNV - Call single nucleotide variants from META-CS data processed with annotateReadFamilies.\n" +
+		"mcsCallVariants - Call single nucleotide variants from META-CS data processed with annotateReadFamilies.\n" +
 			"Usage:\n" +
 			"callSNV [options] -i input.bam -b input.bed -r reference.fasta > output.vcf\n\n")
 	flag.PrintDefaults()
@@ -63,7 +63,7 @@ func main() {
 		log.Fatal("ERROR: -s * 2 should not be larger than -a")
 	}
 
-	callSNV(*input, *output, *ref, *bedFile, uint8(*minMapQ), *totalDepth, *strandedDepth, *minAf, *debugLevel)
+	mcsCallVariants(*input, *output, *ref, *bedFile, uint8(*minMapQ), *totalDepth, *strandedDepth, *minAf, *debugLevel)
 
 	if *memprofile != "" {
 		f, err := os.Create(*memprofile)
@@ -78,7 +78,7 @@ func main() {
 	}
 }
 
-func callSNV(input, output, ref, bedFile string, minMapQ uint8, minTotalDepth, minStrandedDepth int, minAf float64, debugLevel int) {
+func mcsCallVariants(input, output, ref, bedFile string, minMapQ uint8, minTotalDepth, minStrandedDepth int, minAf float64, debugLevel int) {
 	bamReader, bamHeader := sam.OpenBam(input)
 	bai := sam.ReadBai(input + ".bai")
 	vcfOut := fileio.EasyCreate(output)
