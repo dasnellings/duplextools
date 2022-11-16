@@ -12,10 +12,11 @@ import (
 	"log"
 	"math/rand"
 	"sort"
+	"strconv"
 	"strings"
 )
 
-const debug int = 1
+const debug int = 0
 
 var countMat []int
 
@@ -30,6 +31,7 @@ func usage() {
 func main() {
 	input := flag.String("i", "", "Input bed file. Must be coordinate sorted.")
 	output := flag.String("o", "stdout", "Output bedgraph file.")
+	windowSize := flag.Int("windowSize", 0, "Count number of alleles in 'windowSize'. Set to zero to count by overlaps.")
 	minOverlap := flag.Int("minOverlap", 10, "Minimum overlap of two read families to be considered from different alleles. Tn5 generates a 9bp overlap.")
 	maxBedLength := flag.Int("maxBedLen", 2000, "Maximum size of a bed record for inclusion in analysis.")
 	minReads := flag.Int("minReads", 3, "Minimum size of read family for inclusion in analysis.")
@@ -42,16 +44,18 @@ func main() {
 		log.Fatal("ERROR: Must input a coordinate sorted bed file.")
 	}
 
-	callCopyNumber(*input, *output, *minOverlap-1, *maxBedLength, *minReads, *mergeIdenticalPos)
+	callCopyNumber(*input, *output, *minOverlap-1, *maxBedLength, *minReads, *mergeIdenticalPos, *windowSize)
 }
 
-func callCopyNumber(input, output string, trimLen, maxBedLen, minReads int, merge bool) {
+func callCopyNumber(input, output string, trimLen, maxBedLen, minReads int, merge bool, windowSize int) {
 	var err error
 	var prevChrom string
 	var prevStart int
 	var overlapSet []bed.Bed
 	records := bed.GoReadToChan(input)
 	out := fileio.EasyCreate(output)
+	var watsonDepth, crickDepth, totalDepth int
+	var currWindow bed.Bed
 
 	var debugOut io.WriteCloser
 	if debug == 1 {
@@ -65,24 +69,46 @@ func callCopyNumber(input, output string, trimLen, maxBedLen, minReads int, merg
 		prevStart = b.ChromStart
 
 		err = trim(&b, trimLen)
-		if err != nil || b.ChromEnd-b.ChromStart > maxBedLen || b.Score < minReads {
+		watsonDepth, _ = strconv.Atoi(b.Annotation[0])
+		crickDepth, _ = strconv.Atoi(b.Annotation[1])
+		totalDepth = watsonDepth + crickDepth
+		if err != nil || b.ChromEnd-b.ChromStart > maxBedLen || totalDepth < minReads {
 			continue
 		}
 
-		switch {
-		case len(overlapSet) == 0: // nothing in overlap set
-			overlapSet = append(overlapSet, b)
+		if windowSize == 0 {
+			switch {
+			case len(overlapSet) == 0: // nothing in overlap set
+				overlapSet = append(overlapSet, b)
 
-		case !anyOverlaps(overlapSet, b): // no overlaps with set
-			writeOverlapsCounting(out, overlapSet, merge, debugOut)
-			overlapSet = overlapSet[:0]
-			overlapSet = append(overlapSet, b)
+			case !anyOverlaps(overlapSet, b): // no overlaps with set
+				writeOverlapsCounting(out, overlapSet, merge, debugOut)
+				overlapSet = overlapSet[:0]
+				overlapSet = append(overlapSet, b)
 
-		default: // overlaps the set
-			overlapSet = append(overlapSet, b)
+			default: // overlaps the set
+				overlapSet = append(overlapSet, b)
+			}
+			continue
 		}
+
+		if b.Chrom != currWindow.Chrom || b.ChromStart > currWindow.ChromEnd {
+			fmt.Fprintf(out, "%s\t%d\t%d\t%d\n", currWindow.Chrom, currWindow.ChromStart, currWindow.ChromEnd, currWindow.Score)
+			currWindow.Chrom = b.Chrom
+			currWindow.ChromStart = b.ChromStart
+			currWindow.ChromEnd = b.ChromStart + windowSize
+			currWindow.Score = 1
+			continue
+		}
+		currWindow.Score++
 	}
-	writeOverlapsCounting(out, overlapSet, merge, debugOut)
+
+	if windowSize == 0 {
+		writeOverlapsCounting(out, overlapSet, merge, debugOut)
+	} else {
+		fmt.Fprintf(out, "%s\t%d\t%d\t%d\n", currWindow.Chrom, currWindow.ChromStart, currWindow.ChromEnd, currWindow.Score)
+	}
+
 	err = out.Close()
 	exception.PanicOnErr(err)
 	if debug == 1 {

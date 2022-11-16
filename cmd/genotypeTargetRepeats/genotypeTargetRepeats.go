@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/dasnellings/MCS_MS/gmm"
@@ -90,7 +91,11 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 	bamIdxs := make([]sam.Bai, len(inputFiles))
 	for i := range inputFiles {
 		br[i], headers[i] = sam.OpenBam(inputFiles[i])
-		bamIdxs[i] = sam.ReadBai(inputFiles[i] + ".bai")
+		if _, err = os.Stat(inputFiles[i] + ".bai"); !errors.Is(err, os.ErrNotExist) {
+			bamIdxs[i] = sam.ReadBai(inputFiles[i] + ".bai")
+		} else {
+			bamIdxs[i] = sam.ReadBai(strings.TrimSuffix(inputFiles[i], ".bam") + ".bai")
+		}
 	}
 
 	bamOutHandle := make([]io.WriteCloser, len(inputFiles))
