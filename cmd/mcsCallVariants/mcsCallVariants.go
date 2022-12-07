@@ -99,7 +99,7 @@ func mcsCallVariants(input, output, ref, bedFile string, minMapQ uint8, minTotal
 		if watsonDepth < minStrandedDepth || crickDepth < minStrandedDepth {
 			continue
 		}
-		familyVariants = callFamily(b, bamReader, bamHeader, faSeeker, bai, minMapQ, watsonDepth, crickDepth, minAf, minTotalDepth, minStrandedDepth)
+		familyVariants = callFamily(b, bamReader, bamHeader, faSeeker, bai, minMapQ, watsonDepth, crickDepth, minAf, minTotalDepth, minStrandedDepth, debugLevel)
 		vcf.WriteVcfToFileHandle(vcfOut, familyVariants)
 		if debugLevel > 0 {
 			log.Println("Finished Read Family:", b)
@@ -114,7 +114,7 @@ func mcsCallVariants(input, output, ref, bedFile string, minMapQ uint8, minTotal
 	exception.PanicOnErr(err)
 }
 
-func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker *fasta.Seeker, bai sam.Bai, minMapQ uint8, expectedWatsonDepth, expectedCrickDepth int, minAf float64, minTotalDepth, minStrandedDepth int) []vcf.Vcf {
+func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker *fasta.Seeker, bai sam.Bai, minMapQ uint8, expectedWatsonDepth, expectedCrickDepth int, minAf float64, minTotalDepth, minStrandedDepth int, debugLevel int) []vcf.Vcf {
 	var reads []sam.Sam
 	var famId string
 	var strand byte
@@ -149,8 +149,8 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker
 	watsonPiles := pileup(watsonReads, header)
 	crickPiles := pileup(crickReads, header)
 
-	if len(watsonReads) != expectedWatsonDepth || len(crickReads) != expectedCrickDepth {
-		log.Printf("WARNING: mismatch in expected (%d/%d) and actual (%d/%d) number of reads at\n%s\n", expectedWatsonDepth, expectedCrickDepth, len(watsonReads), len(crickReads), b)
+	if debugLevel == 1 && len(watsonReads) != expectedWatsonDepth || len(crickReads) != expectedCrickDepth {
+		log.Printf("WARNING: mismatch in expected (%d/%d) and actual (%d/%d) number of reads, may be supplementary alignments were removed at\n%s\n", expectedWatsonDepth, expectedCrickDepth, len(watsonReads), len(crickReads), b)
 	}
 
 	// remove piles that fall outside the consensus start/end of the read families
