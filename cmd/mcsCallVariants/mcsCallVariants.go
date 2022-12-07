@@ -150,7 +150,7 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker
 	crickPiles := pileup(crickReads, header)
 
 	if len(watsonReads) != expectedWatsonDepth || len(crickReads) != expectedCrickDepth {
-		log.Printf("WARNING: mismatch in expected (%d/%d) and actual (%d/%d) number of reads at\n%s\n", len(watsonReads), expectedWatsonDepth, len(crickReads), expectedCrickDepth, b)
+		log.Printf("WARNING: mismatch in expected (%d/%d) and actual (%d/%d) number of reads at\n%s\n", expectedWatsonDepth, expectedCrickDepth, len(watsonReads), len(crickReads), b)
 	}
 
 	// remove piles that fall outside the consensus start/end of the read families
