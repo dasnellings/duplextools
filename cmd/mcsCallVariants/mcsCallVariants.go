@@ -149,7 +149,7 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker
 	watsonPiles := pileup(watsonReads, header)
 	crickPiles := pileup(crickReads, header)
 
-	if debugLevel > 0 && len(watsonReads) != expectedWatsonDepth || len(crickReads) != expectedCrickDepth {
+	if debugLevel > 0 && (len(watsonReads) != expectedWatsonDepth || len(crickReads) != expectedCrickDepth) {
 		log.Printf("WARNING: mismatch in expected (%d/%d) and actual (%d/%d) number of reads, may be supplementary alignments were removed at\n%s\n", expectedWatsonDepth, expectedCrickDepth, len(watsonReads), len(crickReads), b)
 	}
 
