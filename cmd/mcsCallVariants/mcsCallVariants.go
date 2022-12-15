@@ -260,6 +260,7 @@ func pileup(reads []sam.Sam, header sam.Header) []sam.Pile {
 
 	samChan := make(chan sam.Sam, len(reads))
 	for i := range reads {
+		sclipTerminalIns(&reads[i])
 		samChan <- reads[i]
 	}
 	close(samChan)
@@ -520,4 +521,17 @@ func calcDepth(s sam.Pile) int {
 	}
 	// Note that DelCount does NOT count towards depth
 	return depth
+}
+
+// sclipTerminalIns will convert an insertion on the left or right end of the read to a soft clip
+func sclipTerminalIns(s *sam.Sam) {
+	if len(s.Cigar) == 0 || s.Cigar[0].Op == '*' {
+		return
+	}
+	if s.Cigar[0].Op == 'I' {
+		s.Cigar[0].Op = 'S'
+	}
+	if s.Cigar[len(s.Cigar)-1].Op == 'I' {
+		s.Cigar[len(s.Cigar)-1].Op = 'S'
+	}
 }
