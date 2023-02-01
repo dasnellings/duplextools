@@ -62,6 +62,7 @@ func main() {
 	var allowDups *bool = flag.Bool("allowDups", false, "Do not remove duplicate reads when genotyping.")
 	var debugVal *int = flag.Int("debug", 0, "Set to 1 or greater for debug prints.")
 	var minReads *int = flag.Int("minReads", 5, "Minimum total enclosing reads for genotyping.")
+	var alignerThreads *int = flag.Int("alnThreads", 1, "Number of alignment threads.")
 	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to `file`")
 	memprofile := flag.String("memprofile", "", "write memory profile to `file`")
 	flag.Parse()
@@ -90,7 +91,7 @@ func main() {
 		log.Fatalf("minMapQ out of range. max: %d\n", math.MaxUint8)
 	}
 
-	genotypeTargetRepeats(inputs, *ref, *targets, *output, *bamOut, *targetPadding, *minFlankOverlap, *minMapQ, *minReads, !*allowDups)
+	genotypeTargetRepeats(inputs, *ref, *targets, *output, *bamOut, *targetPadding, *minFlankOverlap, *minMapQ, *minReads, !*allowDups, *alignerThreads)
 
 	if *memprofile != "" {
 		f, err := os.Create(*memprofile)
@@ -105,9 +106,9 @@ func main() {
 	}
 }
 
-func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile, bamOutPfx string, targetPadding, minFlankOverlap, minMapQ, minReads int, removeDups bool) {
+func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile, bamOutPfx string, targetPadding, minFlankOverlap, minMapQ, minReads int, removeDups bool, alignerThreads int) {
 	var err error
-	ref := fasta.NewSeeker(refFile, "")
+	var ref *fasta.Seeker
 	targets := bed.Read(targetsFile)
 	vcfOut := fileio.EasyCreate(outputFile)
 	vcfHeader := generateVcfHeader(strings.Join(inputFiles, "\t"))
@@ -139,8 +140,13 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 	observedLengths := make([][]int, len(inputFiles))     // first index is sample
 	var currVcf vcf.Vcf
 	var i int
-	alignerInput := make(chan sam.Sam)
-	alignerOutput := realign.GoRealignIndels(alignerInput, ref)
+	alignerInput := make(chan sam.Sam, 100)
+	alignerOutput := make(chan sam.Sam, 100)
+	for j := 0; j < alignerThreads; j++ {
+		ref = fasta.NewSeeker(refFile, "")
+		defer ref.Close()
+		go realign.RealignIndels(alignerInput, alignerOutput, ref)
+	}
 	mm := new(gmm.MixtureModel)
 	gaussians := make([][]float64, 2)
 	var floatSlice []float64
@@ -175,6 +181,7 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 		vcf.WriteVcf(vcfOut, currVcf)
 	}
 	close(alignerInput)
+	close(alignerOutput)
 
 	for i = range inputFiles {
 		err = br[i].Close()
@@ -183,8 +190,6 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 		exception.PanicOnErr(err)
 		err = bamOutHandle[i].Close()
 	}
-	err = ref.Close()
-	exception.PanicOnErr(err)
 	err = vcfOut.Close()
 	exception.PanicOnErr(err)
 }
@@ -212,13 +217,7 @@ func getLenghtDist(enclosingReads []*sam.Sam, targetPadding, minMapQ, minFlankOv
 	}
 
 	// STEP 2: Realign reads to target region
-	for i := range reads {
-		if minMapQ != -1 && reads[i].MapQ < uint8(minMapQ) {
-			continue
-		}
-		alignerInput <- reads[i]
-		reads[i] = <-alignerOutput
-	}
+	realignReads(reads, minMapQ, alignerInput, alignerOutput) // read order in slice may change
 
 	// STEP 3: Determine which realigned reads overlap targets with the minimum flanking overlap
 	for i := range reads {
@@ -361,6 +360,42 @@ func dedup(reads []*sam.Sam) []*sam.Sam {
 		}
 	}
 	return reads
+}
+
+// read order may change
+func realignReads(reads []sam.Sam, minMapQ int, alignerInput chan<- sam.Sam, alignerOutput <-chan sam.Sam) {
+	var readsSkipped, readsReceived int
+
+	// count how many reads will be skipped over for realignment
+	for i := range reads {
+		if minMapQ != -1 && reads[i].MapQ < uint8(minMapQ) {
+			readsSkipped++
+		}
+	}
+
+	// start streaming reads to aligner
+	go sendReads(reads, minMapQ, alignerInput)
+
+	// start receiving aligned reads
+	for read := range alignerOutput {
+		reads[readsReceived] = read
+		readsReceived++
+
+		// break when all reads sent for alignment have been received
+		if readsReceived+readsSkipped == len(reads) {
+			reads = reads[0:readsReceived]
+			break
+		}
+	}
+}
+
+func sendReads(reads []sam.Sam, minMapQ int, alignerInput chan<- sam.Sam) {
+	for i := range reads {
+		if minMapQ != -1 && reads[i].MapQ < uint8(minMapQ) {
+			continue
+		}
+		alignerInput <- reads[i]
+	}
 }
 
 func resetEnclosingReads(s []*sam.Sam, len int) []*sam.Sam {

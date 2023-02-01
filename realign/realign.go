@@ -18,6 +18,10 @@ func GoRealignIndels(reads <-chan sam.Sam, ref *fasta.Seeker) <-chan sam.Sam {
 	return output
 }
 
+func RealignIndels(reads <-chan sam.Sam, output chan<- sam.Sam, ref *fasta.Seeker) {
+	realignIndelsEngine(reads, output, ref)
+}
+
 func realignIndels(in <-chan sam.Sam, out chan<- sam.Sam, ref *fasta.Seeker) {
 	var currStart, currEnd int
 	var currRegion []dna.Base
