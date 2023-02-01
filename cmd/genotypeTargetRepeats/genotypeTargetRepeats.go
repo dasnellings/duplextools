@@ -20,6 +20,8 @@ import (
 	"log"
 	"math"
 	"os"
+	"runtime"
+	"runtime/pprof"
 	"sort"
 	"strings"
 )
@@ -57,11 +59,25 @@ func main() {
 	var targetPadding *int = flag.Int("tPad", 50, "Add INT bases of padding to either end of regions in targets file for selecting reads for realignment.")
 	var minFlankOverlap *int = flag.Int("minFlank", 4, "A minimum of INT bases must be mapped on either side of the repeat to be considered an enclosing read.")
 	var minMapQ *int = flag.Int("minMapQ", -1, "Minimum mapping quality (before realignment) to be considered for genotyping. Set to -1 for no filter.")
-	var removeDups *bool = flag.Bool("removeDups", true, "Remove duplicate reads when genotyping.")
+	var allowDups *bool = flag.Bool("allowDups", false, "Do not remove duplicate reads when genotyping.")
 	var debugVal *int = flag.Int("debug", 0, "Set to 1 or greater for debug prints.")
 	var minReads *int = flag.Int("minReads", 5, "Minimum total enclosing reads for genotyping.")
+	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to `file`")
+	memprofile := flag.String("memprofile", "", "write memory profile to `file`")
 	flag.Parse()
 	flag.Usage = usage
+
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			log.Fatal("could not create CPU profile: ", err)
+		}
+		defer f.Close() // error handling omitted for example
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatal("could not start CPU profile: ", err)
+		}
+		defer pprof.StopCPUProfile()
+	}
 
 	if len(inputs) == 0 || *ref == "" {
 		usage()
@@ -74,7 +90,19 @@ func main() {
 		log.Fatalf("minMapQ out of range. max: %d\n", math.MaxUint8)
 	}
 
-	genotypeTargetRepeats(inputs, *ref, *targets, *output, *bamOut, *targetPadding, *minFlankOverlap, *minMapQ, *minReads, *removeDups)
+	genotypeTargetRepeats(inputs, *ref, *targets, *output, *bamOut, *targetPadding, *minFlankOverlap, *minMapQ, *minReads, !*allowDups)
+
+	if *memprofile != "" {
+		f, err := os.Create(*memprofile)
+		if err != nil {
+			log.Fatal("could not create memory profile: ", err)
+		}
+		defer f.Close() // error handling omitted for example
+		runtime.GC()    // get up-to-date statistics
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			log.Fatal("could not write memory profile: ", err)
+		}
+	}
 }
 
 func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile, bamOutPfx string, targetPadding, minFlankOverlap, minMapQ, minReads int, removeDups bool) {
@@ -102,7 +130,7 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 	bamOut := make([]*sam.BamWriter, len(inputFiles))
 	if bamOutPfx != "" {
 		for i := range inputFiles {
-			bamOutHandle[i] = fileio.EasyCreate(bamOutPfx + inputFiles[i])
+			bamOutHandle[i] = fileio.EasyCreate(bamOutPfx + "_" + inputFiles[i])
 			bamOut[i] = sam.NewBamWriter(bamOutHandle[i], headers[i])
 		}
 	}
@@ -121,7 +149,7 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 		for i = range inputFiles {
 			enclosingReads[i], observedLengths[i] = getLenghtDist(enclosingReads[i], targetPadding, minMapQ, minFlankOverlap, removeDups, bamIdxs[i], region, br[i], bamOut[i], alignerInput, alignerOutput)
 			if bamOutPfx != "" {
-				for j := range enclosingReads {
+				for j := range enclosingReads[i] {
 					sam.WriteToBamFileHandle(bamOut[i], *enclosingReads[i][j], 0)
 				}
 			}
@@ -133,14 +161,14 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 		if !converged {
 			continue
 		}
-		gaussians[0] = gaussianHist(mm.Weights[0], mm.Means[0], mm.Stdev[0])
-		gaussians[1] = gaussianHist(mm.Weights[1], mm.Means[1], mm.Stdev[1])
 
 		if debug > 0 {
 			fmt.Println(region, len(observedLengths), printLengths(observedLengths))
 			fmt.Println(mm.Means)
 		}
 		if debug > 1 {
+			gaussians[0] = gaussianHist(mm.Weights[0], mm.Means[0], mm.Stdev[0])
+			gaussians[1] = gaussianHist(mm.Weights[1], mm.Means[1], mm.Stdev[1])
 			plot(observedLengths, minReads, gaussians)
 		}
 		currVcf = callGenotypes(region, minReads, enclosingReads, observedLengths)
@@ -364,6 +392,9 @@ func plot(observedLengths [][]int, minReads int, gaussians [][]float64) {
 			readsPerSample[i]++
 		}
 	}
+	if len(observedLengths) == 1 && readsPerSample[0] < minReads {
+		return
+	}
 	fmt.Println(asciigraph.PlotMany(gaussians, asciigraph.Precision(0), asciigraph.SeriesColors(
 		asciigraph.Red,
 		asciigraph.Yellow,
@@ -378,12 +409,12 @@ func plot(observedLengths [][]int, minReads int, gaussians [][]float64) {
 	), asciigraph.Height(10)))
 
 	for i := range p {
-		//if readsPerSample[i] < minReads {
-		//	continue
-		//}
-		if i != 0 {
+		if readsPerSample[i] < minReads {
 			continue
 		}
+		//if i != 0 {
+		//	continue
+		//}
 		fmt.Println(asciigraph.Plot(p[i], asciigraph.Height(5), asciigraph.Precision(0), asciigraph.SeriesColors(asciigraph.AnsiColor(i))))
 	}
 
