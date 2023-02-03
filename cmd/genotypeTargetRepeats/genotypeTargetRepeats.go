@@ -23,6 +23,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -177,7 +178,7 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 			gaussians[1] = gaussianHist(mm.Weights[1], mm.Means[1], mm.Stdev[1])
 			plot(observedLengths, minReads, gaussians)
 		}
-		currVcf = callGenotypes(region, minReads, enclosingReads, observedLengths)
+		currVcf = callGenotypes(ref, region, minReads, enclosingReads, observedLengths, mm)
 		vcf.WriteVcf(vcfOut, currVcf)
 	}
 	close(alignerInput)
@@ -194,9 +195,63 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 	exception.PanicOnErr(err)
 }
 
-func callGenotypes(region bed.Bed, minReads int, enclosingReads [][]*sam.Sam, observedLengths [][]int) vcf.Vcf {
+func callGenotypes(ref *fasta.Seeker, region bed.Bed, minReads int, enclosingReads [][]*sam.Sam, observedLengths [][]int, mm *gmm.MixtureModel) vcf.Vcf {
 	var ans vcf.Vcf
+	repeatUnitLen, refNumRepeats := parseRepeatSeq(region.Name)
+	refRepeatLen := refNumRepeats * len(repeatUnitLen)
+	ans.Chr = region.Chrom
+	ans.Pos = region.ChromStart
+	refSeq, err := fasta.SeekByName(ref, region.Chrom, region.ChromStart, region.ChromEnd)
+	exception.PanicOnErr(err)
+	dna.AllToUpper(refSeq)
+	ans.Ref = dna.BasesToString(refSeq)
+	if len(ans.Ref) != refRepeatLen {
+		log.Panicf("ERROR: %s ref seq is \n%s\n the length of %d does not match expected %d from bed file.", region, ans.Ref[1:], len(ans.Ref), refRepeatLen)
+	}
 
+	ans.Id = region.Name
+	altLens := make([]int, 2)
+	var refLenDiff int
+	for i, l := range mm.Means {
+		altLens[i] = int(math.Round(l))
+		refLenDiff = refRepeatLen - altLens[i]
+		for _, alts := range ans.Alt {
+			if len(alts) == altLens[i] {
+				refLenDiff = 0 // to engage break below
+			}
+		}
+		if refLenDiff == 0 {
+			continue
+		}
+		ans.Alt = append(ans.Alt, ans.Ref[0:len(ans.Ref)-refLenDiff-1])
+	}
+
+	info := new(strings.Builder)
+	info.WriteString(fmt.Sprintf("RefLength=%d", refRepeatLen))
+	info.WriteString(";Means=")
+	for i, j := range mm.Means {
+		if i > 0 {
+			info.WriteByte(',')
+		}
+		info.WriteString(fmt.Sprintf("%f", j))
+	}
+	info.WriteString(";Stdev=")
+	for i, j := range mm.Stdev {
+		if i > 0 {
+			info.WriteByte(',')
+		}
+		info.WriteString(fmt.Sprintf("%f", j))
+	}
+	info.WriteString(";Weights=")
+	for i, j := range mm.Weights {
+		if i > 0 {
+			info.WriteByte(',')
+		}
+		info.WriteString(fmt.Sprintf("%f", j))
+	}
+	ans.Info = info.String()
+
+	fmt.Println(ans)
 	return ans
 }
 
@@ -250,7 +305,7 @@ func getLenghtDist(enclosingReads []*sam.Sam, targetPadding, minMapQ, minFlankOv
 
 	// STEP 6: Genotype repeats
 	observedLengths := make([]int, len(enclosingReads))
-	repeatSeq := parseRepeatSeq(region.Name)
+	repeatSeq, _ := parseRepeatSeq(region.Name)
 	for i := range enclosingReads {
 		observedLengths[i] = calcRepeatLength(enclosingReads[i], region.ChromStart, region.ChromEnd, repeatSeq)
 		if debug > 2 {
@@ -343,14 +398,17 @@ func calcRepeatLength(read *sam.Sam, regionStart, regionEnd int, repeatSeq []dna
 			}
 		}
 	}
-	return maxLength
+	return maxLength // TODO divide by repeat unit length???
 }
 
-func parseRepeatSeq(s string) []dna.Base {
+func parseRepeatSeq(s string) ([]dna.Base, int) {
+	var words []string
 	if strings.Contains(s, "x") {
-		s = strings.Split(s, "x")[1]
+		words = strings.Split(s, "x")
 	}
-	return dna.StringToBases(s)
+	num, err := strconv.Atoi(words[0])
+	exception.PanicOnErr(err)
+	return dna.StringToBases(words[1]), num
 }
 
 func dedup(reads []*sam.Sam) []*sam.Sam {
