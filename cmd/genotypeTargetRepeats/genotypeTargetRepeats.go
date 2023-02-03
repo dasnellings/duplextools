@@ -178,7 +178,7 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 			gaussians[1] = gaussianHist(mm.Weights[1], mm.Means[1], mm.Stdev[1])
 			plot(observedLengths, minReads, gaussians)
 		}
-		currVcf = callGenotypes(ref, region, minReads, enclosingReads, observedLengths, mm)
+		//currVcf = callGenotypes(ref, region, minReads, enclosingReads, observedLengths, mm)
 		vcf.WriteVcf(vcfOut, currVcf)
 	}
 	close(alignerInput)
