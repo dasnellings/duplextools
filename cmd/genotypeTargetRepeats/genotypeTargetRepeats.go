@@ -205,9 +205,9 @@ func callGenotypes(ref *fasta.Seeker, region bed.Bed, minReads int, enclosingRea
 	exception.PanicOnErr(err)
 	dna.AllToUpper(refSeq)
 	ans.Ref = dna.BasesToString(refSeq)
-	if len(ans.Ref) != refRepeatLen {
-		log.Panicf("ERROR: %s ref seq is \n%s\n the length of %d does not match expected %d from bed file.", region, ans.Ref[1:], len(ans.Ref), refRepeatLen)
-	}
+	//if len(ans.Ref) != refRepeatLen {
+	//	log.Panicf("ERROR: %s ref seq is \n%s\n the length of %d does not match expected %d from bed file.", region, ans.Ref[1:], len(ans.Ref), refRepeatLen)
+	//}
 
 	ans.Id = region.Name
 	altLens := make([]int, 2)
