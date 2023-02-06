@@ -184,7 +184,6 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 		vcf.WriteVcf(vcfOut, currVcf)
 	}
 	close(alignerInput)
-	close(alignerOutput)
 
 	for i = range inputFiles {
 		err = br[i].Close()
