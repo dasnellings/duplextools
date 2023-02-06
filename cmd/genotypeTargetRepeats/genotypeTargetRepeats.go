@@ -132,7 +132,9 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 	bamOut := make([]*sam.BamWriter, len(inputFiles))
 	if bamOutPfx != "" {
 		for i := range inputFiles {
-			bamOutHandle[i] = fileio.EasyCreate(bamOutPfx + "_" + inputFiles[i])
+			words := strings.Split(inputFiles[i], "/")
+			words[len(words)-1] = bamOutPfx + "_" + words[len(words)-1]
+			bamOutHandle[i] = fileio.EasyCreate(strings.Join(words, "/"))
 			bamOut[i] = sam.NewBamWriter(bamOutHandle[i], headers[i])
 		}
 	}
