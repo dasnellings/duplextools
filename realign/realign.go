@@ -7,19 +7,28 @@ import (
 	"github.com/vertgenlab/gonomics/fasta"
 	"github.com/vertgenlab/gonomics/sam"
 	"log"
+	"sync"
 )
 
 var gapOpen int64 = -600
 var gapExtend int64 = -20
 
 func GoRealignIndels(reads <-chan sam.Sam, ref *fasta.Seeker) <-chan sam.Sam {
+	wg := new(sync.WaitGroup)
 	output := make(chan sam.Sam, 1000)
-	go realignIndelsEngine(reads, output, ref)
+	wg.Add(1)
+	go realignIndelsEngine(reads, output, ref, wg)
+	go func(wg *sync.WaitGroup) {
+		wg.Wait()
+		close(output)
+	}(wg)
 	return output
 }
 
 func RealignIndels(reads <-chan sam.Sam, output chan<- sam.Sam, ref *fasta.Seeker) {
-	realignIndelsEngine(reads, output, ref)
+	wg := new(sync.WaitGroup)
+	wg.Add(1)
+	realignIndelsEngine(reads, output, ref, wg)
 }
 
 func realignIndels(in <-chan sam.Sam, out chan<- sam.Sam, ref *fasta.Seeker) {
@@ -40,7 +49,7 @@ func realignIndels(in <-chan sam.Sam, out chan<- sam.Sam, ref *fasta.Seeker) {
 	close(out)
 }
 
-func realignIndelsEngine(in <-chan sam.Sam, out chan<- sam.Sam, ref *fasta.Seeker) {
+func realignIndelsEngine(in <-chan sam.Sam, out chan<- sam.Sam, ref *fasta.Seeker, wg *sync.WaitGroup) {
 	var currStart, currEnd int
 	var currRegion []dna.Base
 	var packet align.TargetQueryPair
@@ -59,7 +68,7 @@ func realignIndelsEngine(in <-chan sam.Sam, out chan<- sam.Sam, ref *fasta.Seeke
 		updateRead(&r, packet.Cigar, currStart, currEnd, packet.Score)
 		out <- r
 	}
-	close(out)
+	wg.Done()
 }
 
 func getRegion(read sam.Sam, ref *fasta.Seeker) (start, end int, region []dna.Base) {
