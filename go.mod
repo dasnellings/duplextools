@@ -4,8 +4,8 @@ go 1.18
 
 require (
 	github.com/guptarohit/asciigraph v0.5.5
-	github.com/vertgenlab/gonomics v0.0.0-20221109033901-698fb66870ec
-	golang.org/x/exp v0.0.0-20221109205753-fc8884afc316
+	github.com/vertgenlab/gonomics v0.0.0-20230208161315-cfe4eaf36ef1
+	golang.org/x/exp v0.0.0-20230213192124-5e25df0256eb
 )
 
-require golang.org/x/image v0.0.0-20210220032944-ac19c3e999fb // indirect
+require golang.org/x/image v0.5.0 // indirect
