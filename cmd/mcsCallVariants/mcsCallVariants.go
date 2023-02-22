@@ -39,6 +39,7 @@ func main() {
 	strandedDepth := flag.Int("s", 2, "Minimum depth of independent watson and crick strands for variant consideration")
 	minMapQ := flag.Int("minMapQ", 20, "Minimum mapping quality.")
 	minAf := flag.Float64("minAF", 0.51, "Minimum fraction of reads with alternate allele **Within a read family and within strand** to be considered a variant.")
+	maxOverlappingFamilies := flag.Int("maxOverlappingFamilies", 100, "Maximum number of overlapping read families for site to be considered for calling. Low number avoids regions with many misalignments (e.g. centromeres) reducing memory usage. Set to -1 for no limit. Analyzed bed will be `bedfile`.analysis.bed")
 	debugLevel := flag.Int("verbose", 0, "Level of verbosity in log.")
 	flag.Parse()
 
@@ -63,7 +64,7 @@ func main() {
 		log.Fatal("ERROR: -s * 2 should not be larger than -a")
 	}
 
-	mcsCallVariants(*input, *output, *ref, *bedFile, uint8(*minMapQ), *totalDepth, *strandedDepth, *minAf, *debugLevel)
+	mcsCallVariants(*input, *output, *ref, *bedFile, uint8(*minMapQ), *totalDepth, *strandedDepth, *minAf, *maxOverlappingFamilies, *debugLevel)
 
 	if *memprofile != "" {
 		f, err := os.Create(*memprofile)
@@ -78,7 +79,10 @@ func main() {
 	}
 }
 
-func mcsCallVariants(input, output, ref, bedFile string, minMapQ uint8, minTotalDepth, minStrandedDepth int, minAf float64, debugLevel int) {
+func mcsCallVariants(input, output, ref, bedFile string, minMapQ uint8, minTotalDepth, minStrandedDepth int, minAf float64, maxOverlappingFamilies int, debugLevel int) {
+	if maxOverlappingFamilies > -1 {
+		bedFile = capOverlaps(bedFile, maxOverlappingFamilies)
+	}
 	bamReader, bamHeader := sam.OpenBam(input)
 	bai := sam.ReadBai(input + ".bai")
 	vcfOut := fileio.EasyCreate(output)
@@ -115,6 +119,7 @@ func mcsCallVariants(input, output, ref, bedFile string, minMapQ uint8, minTotal
 }
 
 func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker *fasta.Seeker, bai sam.Bai, minMapQ uint8, expectedWatsonDepth, expectedCrickDepth int, minAf float64, minTotalDepth, minStrandedDepth int, debugLevel int) []vcf.Vcf {
+	fmt.Println(b)
 	var reads []sam.Sam
 	var famId string
 	var strand byte
@@ -534,4 +539,45 @@ func sclipTerminalIns(s *sam.Sam) {
 	if s.Cigar[len(s.Cigar)-1].Op == 'I' {
 		s.Cigar[len(s.Cigar)-1].Op = 'S'
 	}
+
+	// catch case where beginning/end of read is already soft clipped
+	if len(s.Cigar) >= 2 && s.Cigar[0].Op == 'S' && s.Cigar[1].Op == 'I' {
+		s.Cigar[1].Op = 'S'
+		s.Cigar[1].RunLength += s.Cigar[0].RunLength
+		s.Cigar = s.Cigar[1:]
+	}
+
+	if len(s.Cigar) >= 2 && s.Cigar[len(s.Cigar)-1].Op == 'S' && s.Cigar[len(s.Cigar)-2].Op == 'I' {
+		s.Cigar[len(s.Cigar)-2].Op = 'S'
+		s.Cigar[len(s.Cigar)-2].RunLength += s.Cigar[len(s.Cigar)-1].RunLength
+		s.Cigar = s.Cigar[:len(s.Cigar)-1]
+	}
+}
+
+func capOverlaps(bedFile string, maxOverlaps int) string {
+	outfile := strings.TrimSuffix(bedFile, ".bed") + ".analysis.bed"
+	beds := bed.GoReadToChan(bedFile)
+	out := fileio.EasyCreate(outfile)
+	overlaps := make([]bed.Bed, 0, 1000)
+	for b := range beds {
+		switch {
+		case len(overlaps) == 0:
+			overlaps = append(overlaps, b)
+
+		case bed.Overlap(overlaps[0], b):
+			overlaps = append(overlaps, b)
+
+		default: // does not overlap
+			if len(overlaps) <= maxOverlaps { // write
+				for i := range overlaps {
+					bed.WriteBed(out, overlaps[i])
+				}
+			}
+			overlaps = overlaps[:0]
+			overlaps = append(overlaps, b)
+		}
+	}
+	err := out.Close()
+	exception.PanicOnErr(err)
+	return outfile
 }

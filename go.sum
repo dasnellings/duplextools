@@ -4,6 +4,8 @@ github.com/vertgenlab/gonomics v0.0.0-20221109033901-698fb66870ec h1:DboSjpxcUB3
 github.com/vertgenlab/gonomics v0.0.0-20221109033901-698fb66870ec/go.mod h1:RaxcRybcD8qdv92oUS+z0eJvjdV7Hg1xg1H7468ptfA=
 github.com/vertgenlab/gonomics v0.0.0-20230208161315-cfe4eaf36ef1 h1:c3aepmYyNJDUXODesPHLymF4zysdUxP1mdlfPu7HKgc=
 github.com/vertgenlab/gonomics v0.0.0-20230208161315-cfe4eaf36ef1/go.mod h1:RaxcRybcD8qdv92oUS+z0eJvjdV7Hg1xg1H7468ptfA=
+github.com/vertgenlab/gonomics v0.0.0-20230220221751-ab0d85eee06d h1:b9eg7kFGy3aisylnRWhmVTEcz4UBFAuR5eEIjZ1TRk4=
+github.com/vertgenlab/gonomics v0.0.0-20230220221751-ab0d85eee06d/go.mod h1:RaxcRybcD8qdv92oUS+z0eJvjdV7Hg1xg1H7468ptfA=
 github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=
 golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
 golang.org/x/crypto v0.0.0-20210921155107-089bfa567519/go.mod h1:GvvjBRRGRdwPK5ydBHafDWAxML/pGHZbMvKqRZ5+Abc=

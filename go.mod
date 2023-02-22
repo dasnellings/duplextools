@@ -4,7 +4,7 @@ go 1.18
 
 require (
 	github.com/guptarohit/asciigraph v0.5.5
-	github.com/vertgenlab/gonomics v0.0.0-20230208161315-cfe4eaf36ef1
+	github.com/vertgenlab/gonomics v0.0.0-20230220221751-ab0d85eee06d
 	golang.org/x/exp v0.0.0-20230213192124-5e25df0256eb
 )
 
