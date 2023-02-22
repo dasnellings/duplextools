@@ -119,7 +119,6 @@ func mcsCallVariants(input, output, ref, bedFile string, minMapQ uint8, minTotal
 }
 
 func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker *fasta.Seeker, bai sam.Bai, minMapQ uint8, expectedWatsonDepth, expectedCrickDepth int, minAf float64, minTotalDepth, minStrandedDepth int, debugLevel int) []vcf.Vcf {
-	fmt.Println(b)
 	var reads []sam.Sam
 	var famId string
 	var strand byte
