@@ -18,13 +18,15 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 func usage() {
 	fmt.Print(
-		"mcsCallVariants - Call single nucleotide variants from META-CS data processed with annotateReadFamilies.\n" +
+		"mcsCallVariants - Call variants from META-CS data processed with annotateReadFamilies.\n" +
 			"Usage:\n" +
-			"callSNV [options] -i input.bam -b input.bed -r reference.fasta > output.vcf\n\n")
+			"mcsCallVariants [options] -i input.bam -b input.bed -r reference.fasta > output.vcf\n\n")
 	flag.PrintDefaults()
 }
 
@@ -39,7 +41,8 @@ func main() {
 	strandedDepth := flag.Int("s", 2, "Minimum depth of independent watson and crick strands for variant consideration")
 	minMapQ := flag.Int("minMapQ", 20, "Minimum mapping quality.")
 	minAf := flag.Float64("minAF", 0.51, "Minimum fraction of reads with alternate allele **Within a read family and within strand** to be considered a variant.")
-	maxOverlappingFamilies := flag.Int("maxOverlappingFamilies", 100, "Maximum number of overlapping read families for site to be considered for calling. Low number avoids regions with many misalignments (e.g. centromeres) reducing memory usage. Set to -1 for no limit. Analyzed bed will be `bedfile`.analysis.bed")
+	maxOverlappingFamilies := flag.Int("maxOverlappingFamilies", 20, "Maximum number of overlapping read families for site to be considered for calling. Low number avoids regions with many misalignments (e.g. centromeres) reducing memory usage. Set to -1 for no limit. Analyzed bed will be `bedfile`.analysis.bed")
+	threads := flag.Int("threads", 1, "Number of processor threads to use for calling. Output VCF will be out of order with threads > 1.")
 	debugLevel := flag.Int("verbose", 0, "Level of verbosity in log.")
 	flag.Parse()
 
@@ -55,6 +58,10 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
+	if *threads == 0 {
+		log.Fatal("ERROR: threads must be >= 1.")
+	}
+
 	if *input == "" || *bedFile == "" || *ref == "" {
 		usage()
 		log.Fatal("ERROR: must specify bam (-i), bed (-b), and fasta (-r).")
@@ -64,7 +71,7 @@ func main() {
 		log.Fatal("ERROR: -s * 2 should not be larger than -a")
 	}
 
-	mcsCallVariants(*input, *output, *ref, *bedFile, uint8(*minMapQ), *totalDepth, *strandedDepth, *minAf, *maxOverlappingFamilies, *debugLevel)
+	mcsCallVariants(*input, *output, *ref, *bedFile, uint8(*minMapQ), *totalDepth, *strandedDepth, *minAf, *maxOverlappingFamilies, *debugLevel, *threads)
 
 	if *memprofile != "" {
 		f, err := os.Create(*memprofile)
@@ -79,51 +86,66 @@ func main() {
 	}
 }
 
-func mcsCallVariants(input, output, ref, bedFile string, minMapQ uint8, minTotalDepth, minStrandedDepth int, minAf float64, maxOverlappingFamilies int, debugLevel int) {
-	if maxOverlappingFamilies > -1 {
-		bedFile = capOverlaps(bedFile, maxOverlappingFamilies)
-	}
-	bamReader, bamHeader := sam.OpenBam(input)
-	bai := sam.ReadBai(input + ".bai")
+func mcsCallVariants(input, output, ref, bedFile string, minMapQ uint8, minTotalDepth, minStrandedDepth int, minAf float64, maxOverlappingFamilies int, debugLevel int, threads int) {
+	// progress tracking
+	startTime := time.Now().UnixMilli()
+	lastCheckpointTime := startTime
+	currTime := startTime
+
+	bedFile = filterInputBed(bedFile, maxOverlappingFamilies, minTotalDepth, minStrandedDepth)
 	vcfOut := fileio.EasyCreate(output)
 	vcf.NewWriteHeader(vcfOut, makeVcfHeader(input, ref))
-	faSeeker := fasta.NewSeeker(ref, "")
 	bedChan := bed.GoReadToChan(bedFile)
 
 	var err error
-	var watsonDepth, crickDepth int
 	var familyVariants []vcf.Vcf
 
-	for b := range bedChan {
-		watsonDepth, _ = strconv.Atoi(b.Annotation[0])
-		crickDepth, _ = strconv.Atoi(b.Annotation[1])
-		if watsonDepth+crickDepth < minTotalDepth {
-			continue
+	// overhead for multithreading
+	wg := new(sync.WaitGroup)
+	outputChan := make(chan []vcf.Vcf, 100)
+	for i := 0; i < threads; i++ {
+		wg.Add(1)
+		go spawnThread(bedChan, outputChan, input, ref, minMapQ, minAf, minTotalDepth, minStrandedDepth, wg)
+	}
+
+	// spawn a goroutine to wait until threads are done, then close the output
+	go func(*sync.WaitGroup) {
+		wg.Wait()
+		close(outputChan)
+	}(wg)
+
+	var familiesProcessed int
+	var lastVar vcf.Vcf
+	for v := range outputChan {
+		familiesProcessed++
+		if debugLevel > 0 && familiesProcessed%1000 == 0 {
+			currTime = time.Now().UnixMilli()
+			log.Printf("Processed 1000 Read Families in:\t%dsec\t%s:%d", (currTime-lastCheckpointTime)/1000, lastVar.Chr, lastVar.Pos)
+			lastCheckpointTime = currTime
 		}
-		if watsonDepth < minStrandedDepth || crickDepth < minStrandedDepth {
-			continue
-		}
-		familyVariants = callFamily(b, bamReader, bamHeader, faSeeker, bai, minMapQ, watsonDepth, crickDepth, minAf, minTotalDepth, minStrandedDepth, debugLevel)
-		vcf.WriteVcfToFileHandle(vcfOut, familyVariants)
-		if debugLevel > 1 {
-			log.Println("Finished Read Family:", b)
+		if len(v) > 0 {
+			vcf.WriteVcfToFileHandle(vcfOut, familyVariants)
+			lastVar = v[len(v)-1]
 		}
 	}
 
-	err = bamReader.Close()
-	exception.PanicOnErr(err)
-	err = faSeeker.Close()
-	exception.PanicOnErr(err)
+	endTime := time.Now().UnixMilli()
+	log.Printf("Successfully Completed\nRead Families Processed: %d\nTotal Runtime: %d Minutes\n", familiesProcessed, ((endTime-startTime)/1000)/60)
+
 	err = vcfOut.Close()
 	exception.PanicOnErr(err)
 }
 
-func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker *fasta.Seeker, bai sam.Bai, minMapQ uint8, expectedWatsonDepth, expectedCrickDepth int, minAf float64, minTotalDepth, minStrandedDepth int, debugLevel int) []vcf.Vcf {
-	var reads []sam.Sam
+func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker *fasta.Seeker, bai sam.Bai, minMapQ uint8, minAf float64, minTotalDepth, minStrandedDepth int, recycledReads []sam.Sam) ([]vcf.Vcf, []sam.Sam) {
 	var famId string
 	var strand byte
 	var err error
-	reads = sam.SeekBamRegion(bamReader, bai, b.Chrom, uint32(b.ChromStart), uint32(b.ChromEnd))
+
+	//expectedWatsonDepth, _ := strconv.Atoi(b.Annotation[0])
+	//expectedCrickDepth, _ := strconv.Atoi(b.Annotation[1])
+
+	reads := recycledReads[:0]
+	reads = sam.SeekBamRegionRecycle(bamReader, bai, b.Chrom, uint32(b.ChromStart), uint32(b.ChromEnd), reads)
 	watsonReads := make([]sam.Sam, 0, len(reads))
 	crickReads := make([]sam.Sam, 0, len(reads))
 	for i := range reads {
@@ -153,9 +175,9 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker
 	watsonPiles := pileup(watsonReads, header)
 	crickPiles := pileup(crickReads, header)
 
-	if debugLevel > 0 && (len(watsonReads) != expectedWatsonDepth || len(crickReads) != expectedCrickDepth) {
-		log.Printf("WARNING: mismatch in expected (%d/%d) and actual (%d/%d) number of reads, may be supplementary alignments were removed at\n%s\n", expectedWatsonDepth, expectedCrickDepth, len(watsonReads), len(crickReads), b)
-	}
+	//if debugLevel > 1 && (len(watsonReads) != expectedWatsonDepth || len(crickReads) != expectedCrickDepth) {
+	//	log.Printf("WARNING: mismatch in expected (%d/%d) and actual (%d/%d) number of reads, may be supplementary alignments were removed at\n%s\n", expectedWatsonDepth, expectedCrickDepth, len(watsonReads), len(crickReads), b)
+	//}
 
 	// remove piles that fall outside the consensus start/end of the read families
 	watsonPiles, crickPiles = removePositionalOutliers(watsonPiles, crickPiles, watsonReads, crickReads)
@@ -254,7 +276,7 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker
 		watsonPileIdx++
 		crickPileIdx++
 	}
-	return variants
+	return variants, reads
 }
 
 func pileup(reads []sam.Sam, header sam.Header) []sam.Pile {
@@ -553,11 +575,12 @@ func sclipTerminalIns(s *sam.Sam) {
 	}
 }
 
-func capOverlaps(bedFile string, maxOverlaps int) string {
+func filterInputBed(bedFile string, maxOverlaps int, minTotalDepth int, minStrandedDepth int) string {
 	outfile := strings.TrimSuffix(bedFile, ".bed") + ".analysis.bed"
 	beds := bed.GoReadToChan(bedFile)
 	out := fileio.EasyCreate(outfile)
 	overlaps := make([]bed.Bed, 0, 1000)
+	var watsonDepth, crickDepth int
 	for b := range beds {
 		switch {
 		case len(overlaps) == 0:
@@ -569,6 +592,14 @@ func capOverlaps(bedFile string, maxOverlaps int) string {
 		default: // does not overlap
 			if len(overlaps) <= maxOverlaps { // write
 				for i := range overlaps {
+					watsonDepth, _ = strconv.Atoi(overlaps[i].Annotation[0])
+					crickDepth, _ = strconv.Atoi(overlaps[i].Annotation[1])
+					if watsonDepth+crickDepth < minTotalDepth {
+						continue
+					}
+					if watsonDepth < minStrandedDepth || crickDepth < minStrandedDepth {
+						continue
+					}
 					bed.WriteBed(out, overlaps[i])
 				}
 			}
@@ -579,4 +610,24 @@ func capOverlaps(bedFile string, maxOverlaps int) string {
 	err := out.Close()
 	exception.PanicOnErr(err)
 	return outfile
+}
+
+func spawnThread(inputChan <-chan bed.Bed, outputChan chan<- []vcf.Vcf, inputBam string, ref string, minMapQ uint8, minAf float64, minTotalDepth, minStrandedDepth int, wg *sync.WaitGroup) {
+	bamReader, bamHeader := sam.OpenBam(inputBam)
+	bai := sam.ReadBai(inputBam + ".bai")
+	faSeeker := fasta.NewSeeker(ref, "")
+	var err error
+
+	var familyVariants []vcf.Vcf
+	var recycledReads []sam.Sam
+	for b := range inputChan {
+		familyVariants, recycledReads = callFamily(b, bamReader, bamHeader, faSeeker, bai, minMapQ, minAf, minTotalDepth, minStrandedDepth, recycledReads)
+		outputChan <- familyVariants
+	}
+
+	err = bamReader.Close()
+	exception.PanicOnErr(err)
+	err = faSeeker.Close()
+	exception.PanicOnErr(err)
+	wg.Done()
 }
