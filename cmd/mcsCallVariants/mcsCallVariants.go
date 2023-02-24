@@ -111,7 +111,8 @@ func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, m
 	// progress tracking
 	startTime := time.Now().UnixMilli()
 
-	bedFile = filterInputBed(bedFile, excludeBeds, maxOverlappingFamilies, minTotalDepth, minStrandedDepth)
+	var excludedRegions map[string]*interval.IntervalNode
+	bedFile, excludedRegions = filterInputBed(bedFile, excludeBeds, maxOverlappingFamilies, minTotalDepth, minStrandedDepth)
 	vcfOut := fileio.EasyCreate(output)
 	vcf.NewWriteHeader(vcfOut, makeVcfHeader(input, ref))
 	bedChan := bed.GoReadToChan(bedFile)
@@ -144,7 +145,12 @@ func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, m
 			lastCheckpointTime = currTime
 		}
 		if len(v) > 0 {
-			vcf.WriteVcfToFileHandle(vcfOut, v)
+			for i := range v {
+				if len(interval.Query(excludedRegions, v[i], "any")) > 0 {
+					continue
+				}
+				vcf.WriteVcf(vcfOut, v[i])
+			}
 			lastVar = v[len(v)-1]
 		}
 	}
@@ -595,7 +601,7 @@ func sclipTerminalIns(s *sam.Sam) {
 	}
 }
 
-func filterInputBed(bedFile string, excludeBeds []string, maxOverlaps int, minTotalDepth int, minStrandedDepth int) string {
+func filterInputBed(bedFile string, excludeBeds []string, maxOverlaps int, minTotalDepth int, minStrandedDepth int) (string, map[string]*interval.IntervalNode) {
 	var excludeIntervals []interval.Interval
 	var tree map[string]*interval.IntervalNode
 	for _, e := range excludeBeds {
@@ -630,7 +636,7 @@ func filterInputBed(bedFile string, excludeBeds []string, maxOverlaps int, minTo
 					if watsonDepth < minStrandedDepth || crickDepth < minStrandedDepth {
 						continue
 					}
-					if len(excludeBeds) > 0 && len(interval.Query(tree, overlaps[i], "any")) > 0 {
+					if len(excludeBeds) > 0 && len(interval.Query(tree, overlaps[i], "di")) > 0 { // query entirely contained within excluded region
 						continue
 					}
 					bed.WriteBed(out, overlaps[i])
@@ -642,7 +648,7 @@ func filterInputBed(bedFile string, excludeBeds []string, maxOverlaps int, minTo
 	}
 	err := out.Close()
 	exception.PanicOnErr(err)
-	return outfile
+	return outfile, tree
 }
 
 func spawnThread(inputChan <-chan bed.Bed, outputChan chan<- []vcf.Vcf, inputBam string, ref string, minMapQ uint8, minAf float64, minTotalDepth, minStrandedDepth int, wg *sync.WaitGroup) {
