@@ -118,8 +118,6 @@ func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, m
 	bedChan := bed.GoReadToChan(bedFile)
 
 	var err error
-	lastCheckpointTime := startTime
-	currTime := startTime
 
 	// overhead for multithreading
 	wg := new(sync.WaitGroup)
@@ -137,6 +135,8 @@ func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, m
 
 	var familiesProcessed int
 	var lastVar vcf.Vcf
+	lastCheckpointTime := startTime
+	currTime := startTime
 	for v := range outputChan {
 		familiesProcessed++
 		if debugLevel > 0 && familiesProcessed%1000 == 0 {
