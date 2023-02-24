@@ -98,7 +98,6 @@ func mcsCallVariants(input, output, ref, bedFile string, minMapQ uint8, minTotal
 	bedChan := bed.GoReadToChan(bedFile)
 
 	var err error
-	var familyVariants []vcf.Vcf
 
 	// overhead for multithreading
 	wg := new(sync.WaitGroup)
@@ -124,7 +123,7 @@ func mcsCallVariants(input, output, ref, bedFile string, minMapQ uint8, minTotal
 			lastCheckpointTime = currTime
 		}
 		if len(v) > 0 {
-			vcf.WriteVcfToFileHandle(vcfOut, familyVariants)
+			vcf.WriteVcfToFileHandle(vcfOut, v)
 			lastVar = v[len(v)-1]
 		}
 	}
