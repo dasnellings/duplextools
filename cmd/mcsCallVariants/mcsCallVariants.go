@@ -9,6 +9,7 @@ import (
 	"github.com/vertgenlab/gonomics/exception"
 	"github.com/vertgenlab/gonomics/fasta"
 	"github.com/vertgenlab/gonomics/fileio"
+	"github.com/vertgenlab/gonomics/interval"
 	"github.com/vertgenlab/gonomics/sam"
 	"github.com/vertgenlab/gonomics/vcf"
 	"log"
@@ -30,12 +31,28 @@ func usage() {
 	flag.PrintDefaults()
 }
 
+// inputFiles is a custom type that gets filled by flag.Parse()
+type inputFiles []string
+
+// String to satisfy flag.Value interface
+func (i *inputFiles) String() string {
+	return strings.Join(*i, " ")
+}
+
+// Set to satisfy flag.Value interface
+func (i *inputFiles) Set(value string) error {
+	*i = append(*i, value)
+	return nil
+}
+
 func main() {
+	var excludeBeds inputFiles
 	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to `file`")
 	memprofile := flag.String("memprofile", "", "write memory profile to `file`")
 	input := flag.String("i", "", "Input bam file. Must be indexed.")
 	output := flag.String("o", "stdout", "Output VCF file.")
 	bedFile := flag.String("b", "", "Input bed file with coordinates of read families, read family ID, and read counts for watson and crick strands. Generated with -bed option in annotateReadFamilies.")
+	flag.Var(&excludeBeds, "e", "Bed file(s) with regions to exclude from analysis. May be declared more than once with additional -e flags. Strongly recommended to mask regions with poor mappability.")
 	ref := flag.String("r", "", "Fasta file with reference genome used to align input bam. Must be indexed.")
 	totalDepth := flag.Int("a", 4, "Minimum total depth of read family for variant consideration.")
 	strandedDepth := flag.Int("s", 2, "Minimum depth of independent watson and crick strands for variant consideration")
@@ -58,6 +75,10 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
+	if len(excludeBeds) == 0 {
+		log.Println("WARNING: -e was not declared. It is strongly recommended to mask regions with poor mappability.")
+	}
+
 	if *threads == 0 {
 		log.Fatal("ERROR: threads must be >= 1.")
 	}
@@ -71,7 +92,7 @@ func main() {
 		log.Fatal("ERROR: -s * 2 should not be larger than -a")
 	}
 
-	mcsCallVariants(*input, *output, *ref, *bedFile, uint8(*minMapQ), *totalDepth, *strandedDepth, *minAf, *maxOverlappingFamilies, *debugLevel, *threads)
+	mcsCallVariants(*input, *output, *ref, *bedFile, excludeBeds, uint8(*minMapQ), *totalDepth, *strandedDepth, *minAf, *maxOverlappingFamilies, *debugLevel, *threads)
 
 	if *memprofile != "" {
 		f, err := os.Create(*memprofile)
@@ -86,18 +107,18 @@ func main() {
 	}
 }
 
-func mcsCallVariants(input, output, ref, bedFile string, minMapQ uint8, minTotalDepth, minStrandedDepth int, minAf float64, maxOverlappingFamilies int, debugLevel int, threads int) {
+func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, minMapQ uint8, minTotalDepth, minStrandedDepth int, minAf float64, maxOverlappingFamilies int, debugLevel int, threads int) {
 	// progress tracking
 	startTime := time.Now().UnixMilli()
-	lastCheckpointTime := startTime
-	currTime := startTime
 
-	bedFile = filterInputBed(bedFile, maxOverlappingFamilies, minTotalDepth, minStrandedDepth)
+	bedFile = filterInputBed(bedFile, excludeBeds, maxOverlappingFamilies, minTotalDepth, minStrandedDepth)
 	vcfOut := fileio.EasyCreate(output)
 	vcf.NewWriteHeader(vcfOut, makeVcfHeader(input, ref))
 	bedChan := bed.GoReadToChan(bedFile)
 
 	var err error
+	lastCheckpointTime := startTime
+	currTime := startTime
 
 	// overhead for multithreading
 	wg := new(sync.WaitGroup)
@@ -574,7 +595,17 @@ func sclipTerminalIns(s *sam.Sam) {
 	}
 }
 
-func filterInputBed(bedFile string, maxOverlaps int, minTotalDepth int, minStrandedDepth int) string {
+func filterInputBed(bedFile string, excludeBeds []string, maxOverlaps int, minTotalDepth int, minStrandedDepth int) string {
+	var excludeIntervals []interval.Interval
+	var tree map[string]*interval.IntervalNode
+	for _, e := range excludeBeds {
+		bChan := bed.GoReadToChan(e)
+		for b := range bChan {
+			excludeIntervals = append(excludeIntervals, b)
+		}
+	}
+	tree = interval.BuildTree(excludeIntervals)
+
 	outfile := strings.TrimSuffix(bedFile, ".bed") + ".analysis.bed"
 	beds := bed.GoReadToChan(bedFile)
 	out := fileio.EasyCreate(outfile)
@@ -597,6 +628,9 @@ func filterInputBed(bedFile string, maxOverlaps int, minTotalDepth int, minStran
 						continue
 					}
 					if watsonDepth < minStrandedDepth || crickDepth < minStrandedDepth {
+						continue
+					}
+					if len(excludeBeds) > 0 && len(interval.Query(tree, overlaps[i], "any")) > 0 {
 						continue
 					}
 					bed.WriteBed(out, overlaps[i])
