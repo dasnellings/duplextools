@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/dasnellings/MCS_MS/barcode"
 	"github.com/vertgenlab/gonomics/bed"
+	"github.com/vertgenlab/gonomics/cigar"
 	"github.com/vertgenlab/gonomics/dna"
 	"github.com/vertgenlab/gonomics/exception"
 	"github.com/vertgenlab/gonomics/fasta"
@@ -12,6 +13,7 @@ import (
 	"github.com/vertgenlab/gonomics/interval"
 	"github.com/vertgenlab/gonomics/sam"
 	"github.com/vertgenlab/gonomics/vcf"
+	"golang.org/x/exp/slices"
 	"log"
 	"os"
 	"runtime"
@@ -56,8 +58,9 @@ func main() {
 	ref := flag.String("r", "", "Fasta file with reference genome used to align input bam. Must be indexed.")
 	totalDepth := flag.Int("a", 4, "Minimum total depth of read family for variant consideration.")
 	strandedDepth := flag.Int("s", 2, "Minimum depth of independent watson and crick strands for variant consideration")
+	endPad := flag.Int("ignoreEnds", 1, "Ignore bases within # of end of a read.")
 	minMapQ := flag.Int("minMapQ", 20, "Minimum mapping quality.")
-	minAf := flag.Float64("minAF", 0.51, "Minimum fraction of reads with alternate allele **Within a read family and within strand** to be considered a variant.")
+	minAf := flag.Float64("minAF", 0.9, "Minimum fraction of reads with alternate allele **Within a read family and within strand** to be considered a variant.")
 	maxOverlappingFamilies := flag.Int("maxOverlappingFamilies", 20, "Maximum number of overlapping read families for site to be considered for calling. Low number avoids regions with many misalignments (e.g. centromeres) reducing memory usage. Set to -1 for no limit. Analyzed bed will be `bedfile`.analysis.bed")
 	threads := flag.Int("threads", 1, "Number of processor threads to use for calling. Output VCF will be out of order with threads > 1.")
 	debugLevel := flag.Int("verbose", 0, "Level of verbosity in log.")
@@ -92,7 +95,7 @@ func main() {
 		log.Fatal("ERROR: -s * 2 should not be larger than -a")
 	}
 
-	mcsCallVariants(*input, *output, *ref, *bedFile, excludeBeds, uint8(*minMapQ), *totalDepth, *strandedDepth, *minAf, *maxOverlappingFamilies, *debugLevel, *threads)
+	mcsCallVariants(*input, *output, *ref, *bedFile, excludeBeds, uint8(*minMapQ), *totalDepth, *strandedDepth, *minAf, *endPad, *maxOverlappingFamilies, *debugLevel, *threads)
 
 	if *memprofile != "" {
 		f, err := os.Create(*memprofile)
@@ -107,7 +110,7 @@ func main() {
 	}
 }
 
-func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, minMapQ uint8, minTotalDepth, minStrandedDepth int, minAf float64, maxOverlappingFamilies int, debugLevel int, threads int) {
+func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, minMapQ uint8, minTotalDepth, minStrandedDepth int, minAf float64, endPad int, maxOverlappingFamilies int, debugLevel int, threads int) {
 	// progress tracking
 	startTime := time.Now().UnixMilli()
 
@@ -124,7 +127,7 @@ func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, m
 	outputChan := make(chan []vcf.Vcf, 100)
 	for i := 0; i < threads; i++ {
 		wg.Add(1)
-		go spawnThread(bedChan, outputChan, input, ref, minMapQ, minAf, minTotalDepth, minStrandedDepth, wg)
+		go spawnThread(bedChan, outputChan, input, ref, minMapQ, minAf, endPad, minTotalDepth, minStrandedDepth, wg)
 	}
 
 	// spawn a goroutine to wait until threads are done, then close the output
@@ -162,7 +165,7 @@ func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, m
 	exception.PanicOnErr(err)
 }
 
-func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker *fasta.Seeker, bai sam.Bai, minMapQ uint8, minAf float64, minTotalDepth, minStrandedDepth int, recycledReads []sam.Sam) ([]vcf.Vcf, []sam.Sam) {
+func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker *fasta.Seeker, bai sam.Bai, minMapQ uint8, minAf float64, endPad, minTotalDepth, minStrandedDepth int, recycledReads []sam.Sam) ([]vcf.Vcf, []sam.Sam) {
 	var famId string
 	var strand byte
 	var err error
@@ -183,6 +186,10 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker
 		if famId != b.Name {
 			continue
 		}
+
+		// TODO read
+		//reads[i] = clipReadEnds(reads[i], endPad)
+
 		strand = barcode.GetRS(&reads[i])
 		if strand == 'W' {
 			watsonReads = append(watsonReads, reads[i])
@@ -565,13 +572,6 @@ func calcDepth(s sam.Pile) int {
 	for i := range s.CountF {
 		depth += s.CountF[i] + s.CountR[i]
 	}
-	for _, val := range s.InsCountF {
-		depth += val
-	}
-	for _, val := range s.InsCountR {
-		depth += val
-	}
-	// Note that DelCount does NOT count towards depth
 	return depth
 }
 
@@ -651,7 +651,7 @@ func filterInputBed(bedFile string, excludeBeds []string, maxOverlaps int, minTo
 	return outfile, tree
 }
 
-func spawnThread(inputChan <-chan bed.Bed, outputChan chan<- []vcf.Vcf, inputBam string, ref string, minMapQ uint8, minAf float64, minTotalDepth, minStrandedDepth int, wg *sync.WaitGroup) {
+func spawnThread(inputChan <-chan bed.Bed, outputChan chan<- []vcf.Vcf, inputBam string, ref string, minMapQ uint8, minAf float64, endPad, minTotalDepth, minStrandedDepth int, wg *sync.WaitGroup) {
 	bamReader, bamHeader := sam.OpenBam(inputBam)
 	bai := sam.ReadBai(inputBam + ".bai")
 	faSeeker := fasta.NewSeeker(ref, "")
@@ -660,7 +660,7 @@ func spawnThread(inputChan <-chan bed.Bed, outputChan chan<- []vcf.Vcf, inputBam
 	var familyVariants []vcf.Vcf
 	var recycledReads []sam.Sam
 	for b := range inputChan {
-		familyVariants, recycledReads = callFamily(b, bamReader, bamHeader, faSeeker, bai, minMapQ, minAf, minTotalDepth, minStrandedDepth, recycledReads)
+		familyVariants, recycledReads = callFamily(b, bamReader, bamHeader, faSeeker, bai, minMapQ, minAf, endPad, minTotalDepth, minStrandedDepth, recycledReads)
 		outputChan <- familyVariants
 	}
 
@@ -669,4 +669,60 @@ func spawnThread(inputChan <-chan bed.Bed, outputChan chan<- []vcf.Vcf, inputBam
 	err = faSeeker.Close()
 	exception.PanicOnErr(err)
 	wg.Done()
+}
+
+func clipReadEnds(s sam.Sam, clipLen int) sam.Sam {
+	if s.Cigar == nil || len(s.Cigar) == 0 || s.Cigar[0].Op == '*' {
+		return s
+	}
+
+	var anyNonClip bool
+	for i := range s.Cigar {
+		if s.Cigar[i].Op != 'S' {
+			anyNonClip = true
+			break
+		}
+	}
+
+	if !anyNonClip {
+		return s
+	}
+
+	s = clipFwd(s, clipLen)
+	s = clipRev(s, clipLen)
+	return s
+}
+
+func clipFwd(s sam.Sam, clipLen int) sam.Sam {
+	var firstReadConsumingIdx int
+	for firstReadConsumingIdx = 0; s.Cigar[firstReadConsumingIdx].Op == 'S'; firstReadConsumingIdx++ {
+	}
+
+	// if preceeded by soft clip just add
+	if firstReadConsumingIdx > 0 && s.Cigar[firstReadConsumingIdx-1].Op == 'S' {
+		s.Cigar[firstReadConsumingIdx-1].RunLength += clipLen
+		s.Cigar[firstReadConsumingIdx].RunLength -= clipLen
+		return s
+	}
+
+	s.Cigar[firstReadConsumingIdx].RunLength -= clipLen
+	s.Cigar = slices.Insert(s.Cigar, firstReadConsumingIdx, cigar.Cigar{Op: 'S', RunLength: clipLen})
+	return s
+}
+
+func clipRev(s sam.Sam, clipLen int) sam.Sam {
+	var lastReadConsumingIdx int
+	for lastReadConsumingIdx = len(s.Cigar) - 1; s.Cigar[lastReadConsumingIdx].Op == 'S'; lastReadConsumingIdx-- {
+	}
+
+	// if proceeded by soft clip just add
+	if lastReadConsumingIdx < len(s.Cigar)-1 && s.Cigar[lastReadConsumingIdx+1].Op == 'S' {
+		s.Cigar[lastReadConsumingIdx+1].RunLength += clipLen
+		s.Cigar[lastReadConsumingIdx].RunLength -= clipLen
+		return s
+	}
+
+	s.Cigar[lastReadConsumingIdx].RunLength -= clipLen
+	s.Cigar = slices.Insert(s.Cigar, lastReadConsumingIdx+1, cigar.Cigar{Op: 'S', RunLength: clipLen})
+	return s
 }
