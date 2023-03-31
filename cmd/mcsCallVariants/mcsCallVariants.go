@@ -56,11 +56,13 @@ func main() {
 	bedFile := flag.String("b", "", "Input bed file with coordinates of read families, read family ID, and read counts for watson and crick strands. Generated with -bed option in annotateReadFamilies.")
 	flag.Var(&excludeBeds, "e", "Bed file(s) with regions to exclude from analysis. May be declared more than once with additional -e flags. Strongly recommended to mask regions with poor mappability.")
 	ref := flag.String("r", "", "Fasta file with reference genome used to align input bam. Must be indexed.")
-	totalDepth := flag.Int("a", 4, "Minimum total depth of read family for variant consideration.")
-	strandedDepth := flag.Int("s", 2, "Minimum depth of independent watson and crick strands for variant consideration")
-	endPad := flag.Int("ignoreEnds", 1, "Ignore bases within # of end of a read.")
+	totalDepth := flag.Int("a", 8, "Minimum total depth of read family for variant consideration.")
+	strandedDepth := flag.Int("s", 4, "Minimum depth of independent watson and crick strands for variant consideration")
+	endPad := flag.Int("ignoreEnds", 3, "Ignore bases within # of end of a read.")
 	minMapQ := flag.Int("minMapQ", 20, "Minimum mapping quality.")
+	allowSuppAln := flag.Bool("allowSupplementaryAlignments", false, "Allow variants using reads that have supplementary alignments annotated.")
 	minAf := flag.Float64("minAF", 0.9, "Minimum fraction of reads with alternate allele **Within a read family and within strand** to be considered a variant.")
+	minBaseQuality := flag.Int("minBaseQuality", 30, "Minimum base quality to be considered for calling. Bases below threshold will be ignored.")
 	maxOverlappingFamilies := flag.Int("maxOverlappingFamilies", 20, "Maximum number of overlapping read families for site to be considered for calling. Low number avoids regions with many misalignments (e.g. centromeres) reducing memory usage. Set to -1 for no limit. Analyzed bed will be `bedfile`.analysis.bed")
 	threads := flag.Int("threads", 1, "Number of processor threads to use for calling. Output VCF will be out of order with threads > 1.")
 	debugLevel := flag.Int("verbose", 0, "Level of verbosity in log.")
@@ -95,7 +97,7 @@ func main() {
 		log.Fatal("ERROR: -s * 2 should not be larger than -a")
 	}
 
-	mcsCallVariants(*input, *output, *ref, *bedFile, excludeBeds, uint8(*minMapQ), *totalDepth, *strandedDepth, *minAf, *endPad, *maxOverlappingFamilies, *debugLevel, *threads)
+	mcsCallVariants(*input, *output, *ref, *bedFile, excludeBeds, uint8(*minMapQ), *totalDepth, *strandedDepth, *allowSuppAln, *minAf, *minBaseQuality, *endPad, *maxOverlappingFamilies, *debugLevel, *threads)
 
 	if *memprofile != "" {
 		f, err := os.Create(*memprofile)
@@ -110,7 +112,7 @@ func main() {
 	}
 }
 
-func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, minMapQ uint8, minTotalDepth, minStrandedDepth int, minAf float64, endPad int, maxOverlappingFamilies int, debugLevel int, threads int) {
+func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, minMapQ uint8, minTotalDepth, minStrandedDepth int, allowSuppAln bool, minAf float64, minBaseQuality int, endPad int, maxOverlappingFamilies int, debugLevel int, threads int) {
 	// progress tracking
 	startTime := time.Now().UnixMilli()
 
@@ -127,7 +129,7 @@ func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, m
 	outputChan := make(chan []vcf.Vcf, 100)
 	for i := 0; i < threads; i++ {
 		wg.Add(1)
-		go spawnThread(bedChan, outputChan, input, ref, minMapQ, minAf, endPad, minTotalDepth, minStrandedDepth, wg)
+		go spawnThread(bedChan, outputChan, input, ref, minMapQ, minAf, minBaseQuality, endPad, minTotalDepth, minStrandedDepth, allowSuppAln, wg)
 	}
 
 	// spawn a goroutine to wait until threads are done, then close the output
@@ -165,10 +167,9 @@ func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, m
 	exception.PanicOnErr(err)
 }
 
-func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker *fasta.Seeker, bai sam.Bai, minMapQ uint8, minAf float64, endPad, minTotalDepth, minStrandedDepth int, recycledReads []sam.Sam) ([]vcf.Vcf, []sam.Sam) {
+func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker *fasta.Seeker, bai sam.Bai, minMapQ uint8, minAf float64, minBaseQuality, endPad, minTotalDepth, minStrandedDepth int, allowSuppAln bool, recycledReads []sam.Sam) ([]vcf.Vcf, []sam.Sam) {
 	var famId string
 	var strand byte
-	var err error
 
 	//expectedWatsonDepth, _ := strconv.Atoi(b.Annotation[0])
 	//expectedCrickDepth, _ := strconv.Atoi(b.Annotation[1])
@@ -186,9 +187,12 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker
 		if famId != b.Name {
 			continue
 		}
+		if hasSuppAln(reads[i]) && !allowSuppAln {
+			continue
+		}
 
-		// TODO read
-		//reads[i] = clipReadEnds(reads[i], endPad)
+		clipReadEnds(&reads[i], endPad)
+		maskLowQualityBases(&reads[i], minBaseQuality)
 
 		strand = barcode.GetRS(&reads[i])
 		if strand == 'W' {
@@ -196,6 +200,10 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker
 		} else if strand == 'C' {
 			crickReads = append(crickReads, reads[i])
 		}
+	}
+
+	if (len(watsonReads) == 0 && len(crickReads) == 0) || (len(watsonReads) < minStrandedDepth || len(crickReads) < minStrandedDepth) {
+		return nil, reads
 	}
 
 	sort.Slice(watsonReads, func(i, j int) bool {
@@ -213,15 +221,15 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker
 	//}
 
 	// remove piles that fall outside the consensus start/end of the read families
-	watsonPiles, crickPiles = removePositionalOutliers(watsonPiles, crickPiles, watsonReads, crickReads)
+	watsonPiles, crickPiles = removePositionalOutliers(watsonPiles, crickPiles, watsonReads, crickReads, endPad, b.Name)
+	return pilesToVcfs(watsonPiles, crickPiles, minAf, minStrandedDepth, minTotalDepth, header, faSeeker, b), reads
+}
 
+func pilesToVcfs(watsonPiles, crickPiles []sam.Pile, minAf float64, minStrandedDepth, minTotalDepth int, header sam.Header, faSeeker *fasta.Seeker, b bed.Bed) []vcf.Vcf {
 	var variants []vcf.Vcf
-	var watsonPileIdx, crickPileIdx, watsonDelLen, crickDelLen int
-	var watsonInsSeq, crickInsSeq, chr string
-	var maxWatsonBase, maxCrickBase dna.Base
-	var refBase []dna.Base
-	var watsonVarType, crickVarType variantType
-	var watsonAltAlleleCount, crickAltAlleleCount, watsonInsAlleleCount, crickInsAlleleCount int
+	var v vcf.Vcf
+	var keeper bool
+	var watsonPileIdx, crickPileIdx int
 	for { // pos matching between slices of watson and crick piles
 		if watsonPileIdx == len(watsonPiles) || crickPileIdx == len(crickPiles) {
 			break
@@ -235,81 +243,89 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker
 			continue
 		}
 
-		// matching ref position
-		watsonVarType, maxWatsonBase, watsonInsSeq, watsonDelLen, watsonAltAlleleCount, watsonInsAlleleCount = maxBase(watsonPiles[watsonPileIdx])
-		crickVarType, maxCrickBase, crickInsSeq, crickDelLen, crickAltAlleleCount, crickInsAlleleCount = maxBase(crickPiles[crickPileIdx])
-
-		// special case to bias towards insertions since they are assigned to the position before the insertion
-		if float64(watsonInsAlleleCount)/float64(len(watsonReads)/2) > minAf || float64(crickInsAlleleCount)/float64(len(crickReads)/2) > minAf {
-			watsonVarType = insertion
-			crickVarType = insertion
-			watsonAltAlleleCount = watsonInsAlleleCount
-			crickAltAlleleCount = crickInsAlleleCount
-		}
-
-		// exclude if watson and crick do not agree
-		if watsonVarType != crickVarType {
-			watsonPileIdx++
-			crickPileIdx++
-			continue
-		}
-
-		// exclude if watson or crick AF is less than threshold. divide by 2 for fwd/reverse reads.
-		if float64(watsonAltAlleleCount)/float64(len(watsonReads)/2) < minAf || float64(crickAltAlleleCount)/float64(len(crickReads)/2) < minAf {
-			watsonPileIdx++
-			crickPileIdx++
-			continue
-		}
-
-		// exclude if below minimum read depth
-		if watsonAltAlleleCount < minStrandedDepth || crickAltAlleleCount < minStrandedDepth || watsonAltAlleleCount+crickAltAlleleCount < minTotalDepth {
-			watsonPileIdx++
-			crickPileIdx++
-			continue
-		}
-
-		// variant-type specific filters and processing
-		chr = header.Chroms[watsonPiles[watsonPileIdx].RefIdx].Name
-		switch watsonVarType {
-		case snv:
-			if maxWatsonBase != maxCrickBase {
-				watsonPileIdx++
-				crickPileIdx++
-				continue
-			}
-
-			refBase, err = fasta.SeekByName(faSeeker, chr, int(watsonPiles[watsonPileIdx].Pos-1), int(watsonPiles[watsonPileIdx].Pos))
-			dna.AllToUpper(refBase)
-			exception.PanicOnErr(err)
-
-			if maxWatsonBase == refBase[0] {
-				watsonPileIdx++
-				crickPileIdx++
-				continue
-			}
-			variants = append(variants, snvToVcf(watsonPiles[watsonPileIdx], crickPiles[crickPileIdx], chr, refBase[0], maxWatsonBase, b.Name))
-
-		case insertion:
-			if watsonInsSeq != crickInsSeq {
-				watsonPileIdx++
-				crickPileIdx++
-				continue
-			}
-			variants = append(variants, insToVcf(watsonPiles[watsonPileIdx], crickPiles[crickPileIdx], chr, watsonInsSeq, faSeeker, b.Name))
-
-		case deletion:
-			if watsonDelLen != crickDelLen {
-				watsonPileIdx++
-				crickPileIdx++
-				continue
-			}
-			variants = append(variants, delToVcf(watsonPiles[watsonPileIdx], crickPiles[crickPileIdx], chr, watsonDelLen, faSeeker, b.Name))
+		v, keeper = callFromPilePair(watsonPiles[watsonPileIdx], crickPiles[crickPileIdx], minAf, minStrandedDepth, minTotalDepth, header, faSeeker, b)
+		if keeper {
+			variants = append(variants, v)
 		}
 
 		watsonPileIdx++
 		crickPileIdx++
 	}
-	return variants, reads
+	return variants
+}
+
+func callFromPilePair(wPile, cPile sam.Pile, minAf float64, minStrandedDepth, minTotalDepth int, header sam.Header, faSeeker *fasta.Seeker, b bed.Bed) (vcf.Vcf, bool) {
+	var watsonDelLen, crickDelLen int
+	var watsonInsSeq, crickInsSeq, chr string
+	var maxWatsonBase, maxCrickBase dna.Base
+	var refBase []dna.Base
+	var watsonVarType, crickVarType variantType
+	var watsonAltAlleleCount, crickAltAlleleCount, watsonInsAlleleCount, crickInsAlleleCount int
+	var err error
+	var ans vcf.Vcf
+
+	watsonDepth := pileDepth(wPile)
+	crickDepth := pileDepth(cPile)
+
+	//fmt.Printf("evaluating pile %s:%d\nwatson:\t%v\ncrick:\t%v\n\n", header.Chroms[wPile.RefIdx].Name, wPile.Pos, wPile, cPile)
+
+	// matching ref position
+	watsonVarType, maxWatsonBase, watsonInsSeq, watsonDelLen, watsonAltAlleleCount, watsonInsAlleleCount = maxBase(wPile)
+	crickVarType, maxCrickBase, crickInsSeq, crickDelLen, crickAltAlleleCount, crickInsAlleleCount = maxBase(cPile)
+
+	// special case to bias towards insertions since they are assigned to the position before the insertion
+	if float64(watsonInsAlleleCount)/float64(watsonDepth) > minAf || float64(crickInsAlleleCount)/float64(crickDepth) > minAf {
+		watsonVarType = insertion
+		crickVarType = insertion
+		watsonAltAlleleCount = watsonInsAlleleCount
+		crickAltAlleleCount = crickInsAlleleCount
+	}
+
+	// exclude if watson and crick do not agree
+	if watsonVarType != crickVarType {
+		return ans, false
+	}
+
+	// exclude if watson or crick AF is less than threshold.
+	if float64(watsonAltAlleleCount)/float64(watsonDepth) < minAf || float64(crickAltAlleleCount)/float64(crickDepth) < minAf {
+		return ans, false
+	}
+
+	// exclude if below minimum read depth
+	if watsonAltAlleleCount < minStrandedDepth || crickAltAlleleCount < minStrandedDepth || watsonAltAlleleCount+crickAltAlleleCount < minTotalDepth {
+		return ans, false
+	}
+
+	// variant-type specific filters and processing
+	chr = header.Chroms[wPile.RefIdx].Name
+	switch watsonVarType {
+	case snv:
+		if maxWatsonBase != maxCrickBase {
+			return ans, false
+		}
+
+		refBase, err = fasta.SeekByName(faSeeker, chr, int(wPile.Pos-1), int(wPile.Pos))
+		dna.AllToUpper(refBase)
+		exception.PanicOnErr(err)
+
+		if maxWatsonBase == refBase[0] {
+			return ans, false
+		}
+		ans = snvToVcf(wPile, cPile, chr, refBase[0], maxWatsonBase, b.Name)
+
+	case insertion:
+		if watsonInsSeq != crickInsSeq {
+			return ans, false
+		}
+		ans = insToVcf(wPile, cPile, chr, watsonInsSeq, faSeeker, b.Name)
+
+	case deletion:
+		if watsonDelLen != crickDelLen {
+			return ans, false
+		}
+		ans = delToVcf(wPile, cPile, chr, watsonDelLen, faSeeker, b.Name)
+	}
+	return ans, true
 }
 
 func pileup(reads []sam.Sam, header sam.Header) []sam.Pile {
@@ -346,7 +362,7 @@ func maxBase(p sam.Pile) (tp variantType, snvAltBase dna.Base, insSeq string, de
 
 	// check SNV
 	for i := 0; i < len(p.CountF); i++ {
-		if i == int(dna.Gap) { // deletions handled below
+		if i == int(dna.Gap) || i == int(dna.N) { // deletions handled below, ignore Ns
 			continue
 		}
 		if p.CountF[i]+p.CountR[i] > maxSnvCount {
@@ -499,7 +515,7 @@ func makeVcfHeader(infile string, referenceFile string) vcf.Header {
 	return header
 }
 
-func removePositionalOutliers(watsonPiles, crickPiles []sam.Pile, watsonReads, crickReads []sam.Sam) (filteredWatsonPiles, filteredCrickPiles []sam.Pile) {
+func removePositionalOutliers(watsonPiles, crickPiles []sam.Pile, watsonReads, crickReads []sam.Sam, endPad int, famId string) (filteredWatsonPiles, filteredCrickPiles []sam.Pile) {
 	filteredWatsonPiles = make([]sam.Pile, 0, len(watsonPiles))
 	filteredCrickPiles = make([]sam.Pile, 0, len(crickPiles))
 
@@ -531,23 +547,36 @@ func removePositionalOutliers(watsonPiles, crickPiles []sam.Pile, watsonReads, c
 	for key, val := range fwdStartMap {
 		if val > maxCount {
 			fwdStart = key
+			maxCount = key
 		}
 	}
+	maxCount = 0
 	for key, val := range fwdEndMap {
 		if val > maxCount {
 			fwdEnd = key
+			maxCount = key
 		}
 	}
+	maxCount = 0
 	for key, val := range revStartMap {
 		if val > maxCount {
 			revStart = key
+			maxCount = key
 		}
 	}
+	maxCount = 0
 	for key, val := range revEndMap {
 		if val > maxCount {
 			revEnd = key
+			maxCount = key
 		}
 	}
+
+	// pad positions to ignore piles at ends of reads
+	//fwdStart += endPad
+	//fwdEnd -= endPad
+	//revStart += endPad
+	//revEnd -= endPad
 
 	for i := range watsonPiles {
 		if (int(watsonPiles[i].Pos) > fwdStart && int(watsonPiles[i].Pos) < fwdEnd) ||
@@ -562,7 +591,6 @@ func removePositionalOutliers(watsonPiles, crickPiles []sam.Pile, watsonReads, c
 			filteredCrickPiles = append(filteredCrickPiles, crickPiles[i])
 		}
 	}
-
 	return
 }
 
@@ -651,7 +679,7 @@ func filterInputBed(bedFile string, excludeBeds []string, maxOverlaps int, minTo
 	return outfile, tree
 }
 
-func spawnThread(inputChan <-chan bed.Bed, outputChan chan<- []vcf.Vcf, inputBam string, ref string, minMapQ uint8, minAf float64, endPad, minTotalDepth, minStrandedDepth int, wg *sync.WaitGroup) {
+func spawnThread(inputChan <-chan bed.Bed, outputChan chan<- []vcf.Vcf, inputBam string, ref string, minMapQ uint8, minAf float64, minBaseQuality, endPad, minTotalDepth, minStrandedDepth int, allowSuppAln bool, wg *sync.WaitGroup) {
 	bamReader, bamHeader := sam.OpenBam(inputBam)
 	bai := sam.ReadBai(inputBam + ".bai")
 	faSeeker := fasta.NewSeeker(ref, "")
@@ -660,7 +688,7 @@ func spawnThread(inputChan <-chan bed.Bed, outputChan chan<- []vcf.Vcf, inputBam
 	var familyVariants []vcf.Vcf
 	var recycledReads []sam.Sam
 	for b := range inputChan {
-		familyVariants, recycledReads = callFamily(b, bamReader, bamHeader, faSeeker, bai, minMapQ, minAf, endPad, minTotalDepth, minStrandedDepth, recycledReads)
+		familyVariants, recycledReads = callFamily(b, bamReader, bamHeader, faSeeker, bai, minMapQ, minAf, minBaseQuality, endPad, minTotalDepth, minStrandedDepth, allowSuppAln, recycledReads)
 		outputChan <- familyVariants
 	}
 
@@ -671,9 +699,9 @@ func spawnThread(inputChan <-chan bed.Bed, outputChan chan<- []vcf.Vcf, inputBam
 	wg.Done()
 }
 
-func clipReadEnds(s sam.Sam, clipLen int) sam.Sam {
+func clipReadEnds(s *sam.Sam, clipLen int) {
 	if s.Cigar == nil || len(s.Cigar) == 0 || s.Cigar[0].Op == '*' {
-		return s
+		return
 	}
 
 	var anyNonClip bool
@@ -685,44 +713,144 @@ func clipReadEnds(s sam.Sam, clipLen int) sam.Sam {
 	}
 
 	if !anyNonClip {
-		return s
+		return
 	}
 
-	s = clipFwd(s, clipLen)
-	s = clipRev(s, clipLen)
-	return s
+	clipFwd(s, clipLen)
+	clipRev(s, clipLen)
+
+	// collapse cigar if everything is soft clipped
+	if len(s.Cigar) == 2 && s.Cigar[0].Op == 'S' && s.Cigar[1].Op == 'S' {
+		s.Cigar[0].RunLength += s.Cigar[1].RunLength
+		s.Cigar = s.Cigar[:1]
+	}
+
+	//if cigar.QueryLength(s.Cigar) != len(s.Seq) {
+	//	log.Panic("something went horribly wrong with cigar\n", s)
+	//}
 }
 
-func clipFwd(s sam.Sam, clipLen int) sam.Sam {
-	var firstReadConsumingIdx int
-	for firstReadConsumingIdx = 0; s.Cigar[firstReadConsumingIdx].Op == 'S'; firstReadConsumingIdx++ {
+func clipFwd(s *sam.Sam, clipLen int) {
+	if clipLen < 1 {
+		return
 	}
 
-	// if preceeded by soft clip just add
-	if firstReadConsumingIdx > 0 && s.Cigar[firstReadConsumingIdx-1].Op == 'S' {
-		s.Cigar[firstReadConsumingIdx-1].RunLength += clipLen
-		s.Cigar[firstReadConsumingIdx].RunLength -= clipLen
-		return s
+	// check if first index is soft clip, if not make a soft clip with len = 0
+	if s.Cigar[0].Op != 'S' {
+		s.Cigar = slices.Insert(s.Cigar, 0, cigar.Cigar{Op: 'S', RunLength: 0})
 	}
+	var numToClip int = clipLen
+	var currNumToClip int
+	for i := 1; numToClip > 0; i++ {
+		// increment pos as well as cigar
+		switch s.Cigar[i].Op {
+		case 'M':
+			currNumToClip = min(s.Cigar[i].RunLength, numToClip)
+			s.Cigar[i].RunLength -= currNumToClip
+			s.Cigar[0].RunLength += currNumToClip
+			s.Pos += uint32(currNumToClip)
+			numToClip -= currNumToClip
 
-	s.Cigar[firstReadConsumingIdx].RunLength -= clipLen
-	s.Cigar = slices.Insert(s.Cigar, firstReadConsumingIdx, cigar.Cigar{Op: 'S', RunLength: clipLen})
-	return s
+		case 'D':
+			s.Pos += uint32(s.Cigar[i].RunLength)
+			s.Cigar[i].RunLength = 0
+
+		case 'I':
+			currNumToClip = min(s.Cigar[i].RunLength, numToClip)
+			s.Cigar[0].RunLength += currNumToClip
+			s.Cigar[i].RunLength -= currNumToClip
+			numToClip -= currNumToClip
+
+		case 'S':
+			s.Cigar = cleanCigar(s.Cigar)
+			return
+		}
+	}
+	s.Cigar = cleanCigar(s.Cigar)
 }
 
-func clipRev(s sam.Sam, clipLen int) sam.Sam {
-	var lastReadConsumingIdx int
-	for lastReadConsumingIdx = len(s.Cigar) - 1; s.Cigar[lastReadConsumingIdx].Op == 'S'; lastReadConsumingIdx-- {
+func clipRev(s *sam.Sam, clipLen int) {
+	if clipLen < 1 {
+		return
 	}
 
-	// if proceeded by soft clip just add
-	if lastReadConsumingIdx < len(s.Cigar)-1 && s.Cigar[lastReadConsumingIdx+1].Op == 'S' {
-		s.Cigar[lastReadConsumingIdx+1].RunLength += clipLen
-		s.Cigar[lastReadConsumingIdx].RunLength -= clipLen
-		return s
+	// check if last index is soft clip, if not make a soft clip with len = 0
+	if s.Cigar[len(s.Cigar)-1].Op != 'S' {
+		s.Cigar = append(s.Cigar, cigar.Cigar{Op: 'S', RunLength: 0})
 	}
+	var numToClip int = clipLen
+	var currNumToClip int
+	lastIdx := len(s.Cigar) - 1
+	for i := lastIdx - 1; numToClip > 0; i-- {
+		// increment pos as well as cigar
+		switch s.Cigar[i].Op {
+		case 'M', 'I':
+			currNumToClip = min(s.Cigar[i].RunLength, numToClip)
+			s.Cigar[i].RunLength -= currNumToClip
+			s.Cigar[lastIdx].RunLength += currNumToClip
+			numToClip -= currNumToClip
 
-	s.Cigar[lastReadConsumingIdx].RunLength -= clipLen
-	s.Cigar = slices.Insert(s.Cigar, lastReadConsumingIdx+1, cigar.Cigar{Op: 'S', RunLength: clipLen})
-	return s
+		case 'D':
+			s.Cigar[i].RunLength = 0
+
+		case 'S':
+			s.Cigar = cleanCigar(s.Cigar)
+			return
+		}
+	}
+	s.Cigar = cleanCigar(s.Cigar)
+}
+
+func pileDepth(p sam.Pile) int {
+	var depth int
+	for i := range p.CountF {
+		if i == int(dna.N) {
+			continue
+		}
+		depth += p.CountF[i] + p.CountR[i]
+	}
+	return depth
+}
+
+func maskLowQualityBases(s *sam.Sam, minQual int) {
+	var currQual uint8
+	for i := range s.Qual {
+		currQual = s.Qual[i] - 33
+		if currQual < uint8(minQual) {
+			s.Seq[i] = dna.N
+		}
+	}
+}
+
+func cleanCigar(c []cigar.Cigar) []cigar.Cigar {
+	// remove all indexes with RunLength of 0
+	for i := 0; i < len(c); i++ {
+		if c[i].RunLength == 0 {
+			c = slices.Delete(c, i, i+1)
+			i--
+		}
+	}
+	return c
+}
+
+func hasSuppAln(r sam.Sam) bool {
+	_, found, err := sam.QueryTag(r, "SA")
+	if err != nil || !found {
+		return false
+	}
+	return true
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
