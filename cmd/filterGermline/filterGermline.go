@@ -28,7 +28,7 @@ func main() {
 	minCoverage := flag.Int("minCoverage", 10, "Minimum coverage in bulk bam for consideration in output.")
 	maxReadFrac := flag.Float64("maxReadFrac", 0.1, "Maximum fraction of reads (minimum 1) in bulk sample for variant to be considered for output.")
 	maxReads := flag.Int("maxReads", 100000, "Maximum number of reads with alternate allele present in bulk sample to escape filtering (e.g. set to 1 to exclude all variants with >1 read with alternate allele in bulk sample")
-	minBaseQuality := flag.Int("minBaseQuality", 30, "Minimum base quality to be considered for calling. Bases below threshold will be ignored.")
+	minBaseQuality := flag.Int("minBaseQuality", 0, "Minimum base quality to be considered for calling. Bases below threshold will be ignored.")
 	output := flag.String("o", "stdout", "Output VCF file.")
 	flag.Parse()
 
