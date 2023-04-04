@@ -27,6 +27,8 @@ func main() {
 	genomicBam := flag.String("b", "", "BAM file from bulk tissue. Must be indexed (.bai).")
 	minCoverage := flag.Int("minCoverage", 10, "Minimum coverage in bulk bam for consideration in output.")
 	maxReadFrac := flag.Float64("maxReadFrac", 0.1, "Maximum fraction of reads (minimum 1) in bulk sample for variant to be considered for output.")
+	maxReads := flag.Int("maxReads", 100000, "Maximum number of reads with alternate allele present in bulk sample to escape filtering (e.g. set to 1 to exclude all variants with >1 read with alternate allele in bulk sample")
+	minBaseQuality := flag.Int("minBaseQuality", 30, "Minimum base quality to be considered for calling. Bases below threshold will be ignored.")
 	output := flag.String("o", "stdout", "Output VCF file.")
 	flag.Parse()
 
@@ -35,10 +37,10 @@ func main() {
 		log.Fatalln("ERROR: must have inputs for -i and -b")
 	}
 
-	handleInputs(*input, *output, *genomicBam, *minCoverage, *maxReadFrac)
+	handleInputs(*input, *output, *genomicBam, *minCoverage, *maxReadFrac, *maxReads, *minBaseQuality)
 }
 
-func handleInputs(input, output, genomicBam string, minCoverage int, maxReadFrac float64) {
+func handleInputs(input, output, genomicBam string, minCoverage int, maxReadFrac float64, maxReads int, minBaseQuality int) {
 	var err error
 	out := fileio.EasyCreate(output)
 	inChan, header := vcf.GoReadToChan(input)
@@ -48,7 +50,7 @@ func handleInputs(input, output, genomicBam string, minCoverage int, maxReadFrac
 	gBai := sam.ReadBai(genomicBam + ".bai")
 	//gVcfChan, _ := vcf.GoReadToChan(genomicVcf)
 
-	filterGermline(inChan, out, gBam, gBamHeader, gBai, minCoverage, maxReadFrac)
+	filterGermline(inChan, out, gBam, gBamHeader, gBai, minCoverage, maxReadFrac, maxReads, minBaseQuality)
 
 	//err = ref.Close()
 	//exception.PanicOnErr(err)
@@ -58,14 +60,14 @@ func handleInputs(input, output, genomicBam string, minCoverage int, maxReadFrac
 	exception.PanicOnErr(err)
 }
 
-func filterGermline(inChan <-chan vcf.Vcf, out *fileio.EasyWriter, gBam *sam.BamReader, gBamHeader sam.Header, gBai sam.Bai, minCoverage int, maxReadFrac float64) {
+func filterGermline(inChan <-chan vcf.Vcf, out *fileio.EasyWriter, gBam *sam.BamReader, gBamHeader sam.Header, gBai sam.Bai, minCoverage int, maxReadFrac float64, maxReadsLimit int, minBaseQuality int) {
 	var reads []sam.Sam
 	var p sam.Pile
 	var maxReads, obsReads, delLen int
 	var altBase dna.Base
 	// loop over each variant in input and determine if it belongs in output
 	for v := range inChan {
-		p, reads = retrievePile(v, gBam, gBai, gBamHeader, reads)
+		p, reads = retrievePile(v, gBam, gBai, gBamHeader, reads, minBaseQuality)
 		log.Printf("running %s\t%d\t%s\t%s\tReads:%d\tA:%d\tC:%d\tG:%d\tT:%d\tGap:%d\tIns:%d\tDel:%d\n", v.Chr, v.Pos, v.Ref, v.Alt[0], len(reads),
 			p.CountF[dna.A]+p.CountR[dna.A],
 			p.CountF[dna.C]+p.CountR[dna.C],
@@ -99,7 +101,7 @@ func filterGermline(inChan <-chan vcf.Vcf, out *fileio.EasyWriter, gBam *sam.Bam
 			log.Panicf("something went horribly wrong with the following variant\t%s\n", v)
 		}
 
-		if obsReads > maxReads {
+		if obsReads > maxReads || obsReads > maxReadsLimit {
 			continue
 		}
 
@@ -107,7 +109,7 @@ func filterGermline(inChan <-chan vcf.Vcf, out *fileio.EasyWriter, gBam *sam.Bam
 	}
 }
 
-func retrievePile(v vcf.Vcf, gBam *sam.BamReader, gBai sam.Bai, gBamHeader sam.Header, reads []sam.Sam) (sam.Pile, []sam.Sam) {
+func retrievePile(v vcf.Vcf, gBam *sam.BamReader, gBai sam.Bai, gBamHeader sam.Header, reads []sam.Sam, minBaseQuality int) (sam.Pile, []sam.Sam) {
 	start := uint32(v.Pos) - 1
 	stop := uint32(v.Pos)
 	pos := v.Pos
@@ -117,6 +119,9 @@ func retrievePile(v vcf.Vcf, gBam *sam.BamReader, gBai sam.Bai, gBamHeader sam.H
 		pos++
 	}
 	reads = sam.SeekBamRegionRecycle(gBam, gBai, v.Chr, start, stop, reads)
+	for i := range reads {
+		maskLowQualityBases(&reads[i], minBaseQuality)
+	}
 	sort.Slice(reads, func(i, j int) bool { return reads[i].Pos < reads[j].Pos })
 	piles := pileup(reads, gBamHeader)
 	for i := range piles {
@@ -167,4 +172,14 @@ func sumDel(p sam.Pile) int {
 		ans += val
 	}
 	return ans
+}
+
+func maskLowQualityBases(s *sam.Sam, minQual int) {
+	var currQual uint8
+	for i := range s.Qual {
+		currQual = s.Qual[i] - 33
+		if currQual < uint8(minQual) {
+			s.Seq[i] = dna.N
+		}
+	}
 }
