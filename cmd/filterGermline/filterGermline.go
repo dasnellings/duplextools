@@ -3,9 +3,12 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/vertgenlab/gonomics/bed"
 	"github.com/vertgenlab/gonomics/dna"
 	"github.com/vertgenlab/gonomics/exception"
 	"github.com/vertgenlab/gonomics/fileio"
+	"github.com/vertgenlab/gonomics/interval"
+	"github.com/vertgenlab/gonomics/numbers"
 	"github.com/vertgenlab/gonomics/sam"
 	"github.com/vertgenlab/gonomics/vcf"
 	"log"
@@ -23,7 +26,7 @@ func usage() {
 func main() {
 	input := flag.String("i", "", "Input VCF file with variant calls.")
 	//ref := flag.String("r", "", "Reference FASTA file. Must be indexed (.fai).")
-	//genomicVcf := flag.String("g", "", "VCF file with germline variants from bulk sequencing.")
+	genomicVcf := flag.String("g", "", "VCF file with germline variants from bulk sequencing.")
 	genomicBam := flag.String("b", "", "BAM file from bulk tissue. Must be indexed (.bai).")
 	minCoverage := flag.Int("minCoverage", 10, "Minimum coverage in bulk bam for consideration in output.")
 	maxReadFrac := flag.Float64("maxReadFrac", 0.1, "Maximum fraction of reads (minimum 1) in bulk sample for variant to be considered for output.")
@@ -32,15 +35,15 @@ func main() {
 	output := flag.String("o", "stdout", "Output VCF file.")
 	flag.Parse()
 
-	if *input == "" || *genomicBam == "" {
+	if *input == "" || *genomicBam == "" || *genomicVcf == "" {
 		usage()
-		log.Fatalln("ERROR: must have inputs for -i and -b")
+		log.Fatalln("ERROR: must have inputs for -i, -b, and -g")
 	}
 
-	handleInputs(*input, *output, *genomicBam, *minCoverage, *maxReadFrac, *maxReads, *minBaseQuality)
+	handleInputs(*input, *output, *genomicBam, *genomicVcf, *minCoverage, *maxReadFrac, *maxReads, *minBaseQuality)
 }
 
-func handleInputs(input, output, genomicBam string, minCoverage int, maxReadFrac float64, maxReads int, minBaseQuality int) {
+func handleInputs(input, output, genomicBam, genomicVcf string, minCoverage int, maxReadFrac float64, maxReads int, minBaseQuality int) {
 	var err error
 	out := fileio.EasyCreate(output)
 	inChan, header := vcf.GoReadToChan(input)
@@ -48,9 +51,17 @@ func handleInputs(input, output, genomicBam string, minCoverage int, maxReadFrac
 	//ref := fasta.NewSeeker(reference, "")
 	gBam, gBamHeader := sam.OpenBam(genomicBam)
 	gBai := sam.ReadBai(genomicBam + ".bai")
-	//gVcfChan, _ := vcf.GoReadToChan(genomicVcf)
+	gVcfChan, _ := vcf.GoReadToChan(genomicVcf)
 
-	filterGermline(inChan, out, gBam, gBamHeader, gBai, minCoverage, maxReadFrac, maxReads, minBaseQuality)
+	var excludeIntervals []interval.Interval
+	var padding int
+	for v := range gVcfChan {
+		padding = numbers.Max(len(v.Ref), len(v.Alt[0]))
+		excludeIntervals = append(excludeIntervals, bed.Bed{Chrom: v.Chr, ChromStart: v.Pos - padding, ChromEnd: v.Pos + padding, FieldsInitialized: 3})
+	}
+	tree := interval.BuildTree(excludeIntervals)
+
+	filterGermline(inChan, out, gBam, gBamHeader, gBai, tree, minCoverage, maxReadFrac, maxReads, minBaseQuality)
 
 	//err = ref.Close()
 	//exception.PanicOnErr(err)
@@ -60,13 +71,17 @@ func handleInputs(input, output, genomicBam string, minCoverage int, maxReadFrac
 	exception.PanicOnErr(err)
 }
 
-func filterGermline(inChan <-chan vcf.Vcf, out *fileio.EasyWriter, gBam *sam.BamReader, gBamHeader sam.Header, gBai sam.Bai, minCoverage int, maxReadFrac float64, maxReadsLimit int, minBaseQuality int) {
+func filterGermline(inChan <-chan vcf.Vcf, out *fileio.EasyWriter, gBam *sam.BamReader, gBamHeader sam.Header, gBai sam.Bai, excludeTree map[string]*interval.IntervalNode, minCoverage int, maxReadFrac float64, maxReadsLimit int, minBaseQuality int) {
 	var reads []sam.Sam
 	var p sam.Pile
 	var maxReads, obsReads, delLen int
 	var altBase dna.Base
 	// loop over each variant in input and determine if it belongs in output
 	for v := range inChan {
+		if len(interval.Query(excludeTree, v, "any")) > 0 {
+			continue
+		}
+
 		p, reads = retrievePile(v, gBam, gBai, gBamHeader, reads, minBaseQuality)
 		log.Printf("running %s\t%d\t%s\t%s\tReads:%d\tA:%d\tC:%d\tG:%d\tT:%d\tGap:%d\tIns:%d\tDel:%d\n", v.Chr, v.Pos, v.Ref, v.Alt[0], len(reads),
 			p.CountF[dna.A]+p.CountR[dna.A],

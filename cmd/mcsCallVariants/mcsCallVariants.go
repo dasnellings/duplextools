@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/dasnellings/MCS_MS/barcode"
+	"github.com/dasnellings/MCS_MS/fai"
 	"github.com/vertgenlab/gonomics/bed"
 	"github.com/vertgenlab/gonomics/cigar"
 	"github.com/vertgenlab/gonomics/dna"
@@ -534,6 +535,7 @@ func makeVcfHeader(infile string, referenceFile string) vcf.Header {
 	var header vcf.Header
 	header.Text = append(header.Text, "##fileformat=VCFv4.2")
 	header.Text = append(header.Text, fmt.Sprintf("##reference=%s", referenceFile))
+	header.Text = append(header.Text, fai.IndexToVcfHeader(fai.ReadIndex(referenceFile+".fai")))
 	header.Text = append(header.Text, "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">")
 	header.Text = append(header.Text, "##FORMAT=<ID=DP,Number=1,Type=Integer,Description=\"Total Read Depth\">")
 	header.Text = append(header.Text, "##FORMAT=<ID=WS,Number=1,Type=Integer,Description=\"Watson Strand Read Depth\">")
@@ -830,9 +832,9 @@ func clipRev(s *sam.Sam, clipLen int) {
 func pileDepth(p sam.Pile) int {
 	var depth int
 	for i := range p.CountF {
-		if i == int(dna.N) {
-			continue
-		}
+		//if i == int(dna.N) { // Let's include Ns in count to penalize for low quality bases
+		//	continue
+		//}
 		depth += p.CountF[i] + p.CountR[i]
 	}
 	return depth
