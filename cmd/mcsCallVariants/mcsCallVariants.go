@@ -535,7 +535,7 @@ func makeVcfHeader(infile string, referenceFile string) vcf.Header {
 	var header vcf.Header
 	header.Text = append(header.Text, "##fileformat=VCFv4.2")
 	header.Text = append(header.Text, fmt.Sprintf("##reference=%s", referenceFile))
-	header.Text = append(header.Text, fai.IndexToVcfHeader(fai.ReadIndex(referenceFile+".fai")))
+	header.Text = append(header.Text, strings.TrimSuffix(fai.IndexToVcfHeader(fai.ReadIndex(referenceFile+".fai")), "\n"))
 	header.Text = append(header.Text, "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">")
 	header.Text = append(header.Text, "##FORMAT=<ID=DP,Number=1,Type=Integer,Description=\"Total Read Depth\">")
 	header.Text = append(header.Text, "##FORMAT=<ID=WS,Number=1,Type=Integer,Description=\"Watson Strand Read Depth\">")
