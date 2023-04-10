@@ -62,13 +62,14 @@ func main() {
 	strandedDepth := flag.Int("s", 4, "Minimum depth of independent watson and crick strands for variant consideration")
 	endPad := flag.Int("ignoreEnds", 3, "Ignore bases within # of end of a read.")
 	minMapQ := flag.Int("minMapQ", 20, "Minimum mapping quality.")
+	baseQualPenalty := flag.Float64("baseQualPenalty", 0.25, "Penalty for positions with low quality base. Each reach with a base < minBaseQuality counts towards baseQualPenalty of a read for allele frequency calculations. Note that low quality bases are N-masked and so will always count AGAINST the alternate allele. (e.g. by default each read with a low quality base counts as 0.25 reads for allele frequency determination.")
 	allowSuppAln := flag.Bool("allowSupplementaryAlignments", false, "Allow variants using reads that have supplementary alignments annotated.")
 	minAf := flag.Float64("minAF", 0.9, "Minimum fraction of reads with alternate allele **Within a read family and within strand** to be considered a variant.")
 	minBaseQuality := flag.Int("minBaseQuality", 30, "Minimum base quality to be considered for calling. Bases below threshold will be ignored.")
 	maxOverlappingFamilies := flag.Int("maxOverlappingFamilies", 20, "Maximum number of overlapping read families for site to be considered for calling. Low number avoids regions with many misalignments (e.g. centromeres) reducing memory usage. Set to -1 for no limit. Analyzed bed will be `bedfile`.analysis.bed")
 	threads := flag.Int("threads", 1, "Number of processor threads to use for calling. Output VCF will be out of order with threads > 1.")
 	debugLevel := flag.Int("verbose", 0, "Level of verbosity in log.")
-	debugOut := flag.String("debugLog", "", "Print debug logs to file. File may be large.")
+	debugOut := flag.String("debugLog", "", "Print debug logs to file. File may be large. Must be run with threads == 1 for coherent output. ")
 	flag.Parse()
 
 	if *cpuprofile != "" {
@@ -100,7 +101,7 @@ func main() {
 		log.Fatal("ERROR: -s * 2 should not be larger than -a")
 	}
 
-	mcsCallVariants(*input, *output, *ref, *bedFile, excludeBeds, uint8(*minMapQ), *totalDepth, *strandedDepth, *allowSuppAln, *minAf, *minBaseQuality, *endPad, *maxOverlappingFamilies, *debugLevel, *threads, *debugOut)
+	mcsCallVariants(*input, *output, *ref, *bedFile, excludeBeds, uint8(*minMapQ), *totalDepth, *strandedDepth, *allowSuppAln, *minAf, *minBaseQuality, *baseQualPenalty, *endPad, *maxOverlappingFamilies, *debugLevel, *threads, *debugOut)
 
 	if *memprofile != "" {
 		f, err := os.Create(*memprofile)
@@ -115,7 +116,7 @@ func main() {
 	}
 }
 
-func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, minMapQ uint8, minTotalDepth, minStrandedDepth int, allowSuppAln bool, minAf float64, minBaseQuality int, endPad int, maxOverlappingFamilies int, debugLevel int, threads int, debugOut string) {
+func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, minMapQ uint8, minTotalDepth, minStrandedDepth int, allowSuppAln bool, minAf float64, minBaseQuality int, baseQualPenalty float64, endPad int, maxOverlappingFamilies int, debugLevel int, threads int, debugOut string) {
 	// progress tracking
 	startTime := time.Now().UnixMilli()
 
@@ -140,7 +141,7 @@ func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, m
 	outputChan := make(chan []vcf.Vcf, 100)
 	for i := 0; i < threads; i++ {
 		wg.Add(1)
-		go spawnThread(bedChan, outputChan, input, ref, minMapQ, minAf, minBaseQuality, endPad, minTotalDepth, minStrandedDepth, allowSuppAln, wg, debugOutChan)
+		go spawnThread(bedChan, outputChan, input, ref, minMapQ, minAf, minBaseQuality, baseQualPenalty, endPad, minTotalDepth, minStrandedDepth, allowSuppAln, wg, debugOutChan)
 	}
 
 	// spawn a goroutine to wait until threads are done, then close the output
@@ -189,7 +190,7 @@ func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, m
 	exception.PanicOnErr(err)
 }
 
-func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker *fasta.Seeker, bai sam.Bai, minMapQ uint8, minAf float64, minBaseQuality, endPad, minTotalDepth, minStrandedDepth int, allowSuppAln bool, recycledReads []sam.Sam, debugOutChan chan<- string) ([]vcf.Vcf, []sam.Sam) {
+func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker *fasta.Seeker, bai sam.Bai, minMapQ uint8, minAf float64, minBaseQuality int, baseQualPenalty float64, endPad, minTotalDepth, minStrandedDepth int, allowSuppAln bool, recycledReads []sam.Sam, debugOutChan chan<- string) ([]vcf.Vcf, []sam.Sam) {
 	var famId string
 	var strand byte
 
@@ -245,10 +246,10 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker
 
 	// remove piles that fall outside the consensus start/end of the read families
 	watsonPiles, crickPiles = removePositionalOutliers(watsonPiles, crickPiles, watsonReads, crickReads, endPad, b.Name)
-	return pilesToVcfs(watsonPiles, crickPiles, minAf, minStrandedDepth, minTotalDepth, header, faSeeker, b, debugOutChan), reads
+	return pilesToVcfs(watsonPiles, crickPiles, minAf, baseQualPenalty, minStrandedDepth, minTotalDepth, header, faSeeker, b, debugOutChan), reads
 }
 
-func pilesToVcfs(watsonPiles, crickPiles []sam.Pile, minAf float64, minStrandedDepth, minTotalDepth int, header sam.Header, faSeeker *fasta.Seeker, b bed.Bed, debugOutChan chan<- string) []vcf.Vcf {
+func pilesToVcfs(watsonPiles, crickPiles []sam.Pile, minAf, baseQualPenalty float64, minStrandedDepth, minTotalDepth int, header sam.Header, faSeeker *fasta.Seeker, b bed.Bed, debugOutChan chan<- string) []vcf.Vcf {
 	var variants []vcf.Vcf
 	var v vcf.Vcf
 	var keeper bool
@@ -267,7 +268,7 @@ func pilesToVcfs(watsonPiles, crickPiles []sam.Pile, minAf float64, minStrandedD
 			continue
 		}
 
-		v, keeper = callFromPilePair(watsonPiles[watsonPileIdx], crickPiles[crickPileIdx], minAf, minStrandedDepth, minTotalDepth, header, faSeeker, b, debugOutChan)
+		v, keeper = callFromPilePair(watsonPiles[watsonPileIdx], crickPiles[crickPileIdx], minAf, baseQualPenalty, minStrandedDepth, minTotalDepth, header, faSeeker, b, debugOutChan)
 		if keeper {
 			variants = append(variants, v)
 		}
@@ -278,7 +279,7 @@ func pilesToVcfs(watsonPiles, crickPiles []sam.Pile, minAf float64, minStrandedD
 	return variants
 }
 
-func callFromPilePair(wPile, cPile sam.Pile, minAf float64, minStrandedDepth, minTotalDepth int, header sam.Header, faSeeker *fasta.Seeker, b bed.Bed, debugOutChan chan<- string) (vcf.Vcf, bool) {
+func callFromPilePair(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, minStrandedDepth, minTotalDepth int, header sam.Header, faSeeker *fasta.Seeker, b bed.Bed, debugOutChan chan<- string) (vcf.Vcf, bool) {
 	var watsonDelLen, crickDelLen int
 	var watsonInsSeq, crickInsSeq, chr string
 	var maxWatsonBase, maxCrickBase dna.Base
@@ -288,8 +289,8 @@ func callFromPilePair(wPile, cPile sam.Pile, minAf float64, minStrandedDepth, mi
 	var err error
 	var ans vcf.Vcf
 
-	watsonDepth := pileDepth(wPile)
-	crickDepth := pileDepth(cPile)
+	watsonDepth := pileDepth(wPile, baseQualPenalty)
+	crickDepth := pileDepth(cPile, baseQualPenalty)
 
 	//fmt.Printf("evaluating pile %s:%d\nwatson:\t%v\ncrick:\t%v\n\n", header.Chroms[wPile.RefIdx].Name, wPile.Pos, wPile, cPile)
 
@@ -298,7 +299,7 @@ func callFromPilePair(wPile, cPile sam.Pile, minAf float64, minStrandedDepth, mi
 	crickVarType, maxCrickBase, crickInsSeq, crickDelLen, crickAltAlleleCount, crickInsAlleleCount = maxBase(cPile)
 
 	if debugOutChan != nil {
-		debugOutChan <- fmt.Sprintf("%v, %v", wPile, cPile)
+		debugOutChan <- fmt.Sprintf("watson: %v, crick: %v", wPile, cPile)
 	}
 
 	// special case to bias towards insertions since they are assigned to the position before the insertion
@@ -307,20 +308,32 @@ func callFromPilePair(wPile, cPile sam.Pile, minAf float64, minStrandedDepth, mi
 		crickVarType = insertion
 		watsonAltAlleleCount = watsonInsAlleleCount
 		crickAltAlleleCount = crickInsAlleleCount
+		if debugOutChan != nil {
+			debugOutChan <- fmt.Sprintf("triggered insertion bias")
+		}
 	}
 
 	// exclude if watson and crick do not agree
 	if watsonVarType != crickVarType {
+		if debugOutChan != nil {
+			debugOutChan <- fmt.Sprintf("variant types do not match, moving on")
+		}
 		return ans, false
 	}
 
 	// exclude if watson or crick AF is less than threshold.
 	if float64(watsonAltAlleleCount)/float64(watsonDepth) < minAf || float64(crickAltAlleleCount)/float64(crickDepth) < minAf {
+		if debugOutChan != nil {
+			debugOutChan <- fmt.Sprintf("does not meet af requirements\nwatson: (%d/%d) = %f\ncrick: (%d/%d) = %f", watsonAltAlleleCount, watsonDepth, float64(watsonAltAlleleCount)/float64(watsonDepth), crickAltAlleleCount, crickDepth, float64(crickAltAlleleCount)/float64(crickDepth))
+		}
 		return ans, false
 	}
 
 	// exclude if below minimum read depth
 	if watsonAltAlleleCount < minStrandedDepth || crickAltAlleleCount < minStrandedDepth || watsonAltAlleleCount+crickAltAlleleCount < minTotalDepth {
+		if debugOutChan != nil {
+			debugOutChan <- fmt.Sprintf("does not meet minimum read depth, moving on")
+		}
 		return ans, false
 	}
 
@@ -329,6 +342,9 @@ func callFromPilePair(wPile, cPile sam.Pile, minAf float64, minStrandedDepth, mi
 	switch watsonVarType {
 	case snv:
 		if maxWatsonBase != maxCrickBase {
+			if debugOutChan != nil {
+				debugOutChan <- fmt.Sprintf("variant bases do not match, moving on\nwatson: %s\ncrick: %s", dna.BaseToString(maxWatsonBase), dna.BaseToString(maxCrickBase))
+			}
 			return ans, false
 		}
 
@@ -337,18 +353,27 @@ func callFromPilePair(wPile, cPile sam.Pile, minAf float64, minStrandedDepth, mi
 		exception.PanicOnErr(err)
 
 		if maxWatsonBase == refBase[0] {
+			if debugOutChan != nil {
+				debugOutChan <- fmt.Sprintf("alt base matches ref")
+			}
 			return ans, false
 		}
 		ans = snvToVcf(wPile, cPile, chr, refBase[0], maxWatsonBase, b.Name)
 
 	case insertion:
 		if watsonInsSeq != crickInsSeq {
+			if debugOutChan != nil {
+				debugOutChan <- fmt.Sprintf("different insertion lengths")
+			}
 			return ans, false
 		}
 		ans = insToVcf(wPile, cPile, chr, watsonInsSeq, faSeeker, b.Name)
 
 	case deletion:
 		if watsonDelLen != crickDelLen {
+			if debugOutChan != nil {
+				debugOutChan <- fmt.Sprintf("different deletion lengths")
+			}
 			return ans, false
 		}
 		ans = delToVcf(wPile, cPile, chr, watsonDelLen, faSeeker, b.Name)
@@ -707,7 +732,7 @@ func filterInputBed(bedFile string, excludeBeds []string, maxOverlaps int, minTo
 	return outfile, tree
 }
 
-func spawnThread(inputChan <-chan bed.Bed, outputChan chan<- []vcf.Vcf, inputBam string, ref string, minMapQ uint8, minAf float64, minBaseQuality, endPad, minTotalDepth, minStrandedDepth int, allowSuppAln bool, wg *sync.WaitGroup, debugOutChan chan<- string) {
+func spawnThread(inputChan <-chan bed.Bed, outputChan chan<- []vcf.Vcf, inputBam string, ref string, minMapQ uint8, minAf float64, minBaseQuality int, baseQualPenalty float64, endPad, minTotalDepth, minStrandedDepth int, allowSuppAln bool, wg *sync.WaitGroup, debugOutChan chan<- string) {
 	bamReader, bamHeader := sam.OpenBam(inputBam)
 	bai := sam.ReadBai(inputBam + ".bai")
 	faSeeker := fasta.NewSeeker(ref, "")
@@ -716,7 +741,7 @@ func spawnThread(inputChan <-chan bed.Bed, outputChan chan<- []vcf.Vcf, inputBam
 	var familyVariants []vcf.Vcf
 	var recycledReads []sam.Sam
 	for b := range inputChan {
-		familyVariants, recycledReads = callFamily(b, bamReader, bamHeader, faSeeker, bai, minMapQ, minAf, minBaseQuality, endPad, minTotalDepth, minStrandedDepth, allowSuppAln, recycledReads, debugOutChan)
+		familyVariants, recycledReads = callFamily(b, bamReader, bamHeader, faSeeker, bai, minMapQ, minAf, minBaseQuality, baseQualPenalty, endPad, minTotalDepth, minStrandedDepth, allowSuppAln, recycledReads, debugOutChan)
 		outputChan <- familyVariants
 	}
 
@@ -829,14 +854,17 @@ func clipRev(s *sam.Sam, clipLen int) {
 	s.Cigar = cleanCigar(s.Cigar)
 }
 
-func pileDepth(p sam.Pile) int {
+func pileDepth(p sam.Pile, baseQualPenalty float64) int {
 	var depth int
+	var maskCount int
 	for i := range p.CountF {
-		//if i == int(dna.N) { // Let's include Ns in count to penalize for low quality bases
-		//	continue
-		//}
+		if i == int(dna.N) {
+			maskCount++
+			continue
+		}
 		depth += p.CountF[i] + p.CountR[i]
 	}
+	depth += int(float64(maskCount) * baseQualPenalty)
 	return depth
 }
 
