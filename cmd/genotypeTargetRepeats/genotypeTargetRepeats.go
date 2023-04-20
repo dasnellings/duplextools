@@ -170,7 +170,7 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 
 	gaussians := make([][]float64, 2)
 	var floatSlice []float64
-	var converged, anyConverged bool
+	var converged, anyConverged, passingVariant bool
 	for _, region := range targets {
 		anyConverged = false
 		for i := range inputFiles {
@@ -182,7 +182,7 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 			}
 			slices.Sort(observedLengths[i])
 
-			converged, tmpMm, mm[i] = runMixtureModel(observedLengths[0], tmpMm, mm[i], &floatSlice)
+			converged, tmpMm, mm[i] = runMixtureModel(observedLengths[i], tmpMm, mm[i], &floatSlice)
 			if converged {
 				anyConverged = true
 			}
@@ -200,14 +200,16 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 			plot(observedLengths, minReads, mm, gaussians)
 		}
 
-		//currVcf = callGenotypes(ref, region, minReads, enclosingReads, observedLengths, mm)
-		vcf.WriteVcf(vcfOut, currVcf)
+		currVcf, passingVariant = callGenotypes(ref, region, minReads, enclosingReads, observedLengths, mm)
+		if passingVariant {
+			vcf.WriteVcf(vcfOut, currVcf)
+		}
 	}
 	close(alignerInput)
 	close(alignerOutput)
 }
 
-func callGenotypes(ref *fasta.Seeker, region bed.Bed, minReads int, enclosingReads [][]*sam.Sam, observedLengths [][]int, mm *gmm.MixtureModel) vcf.Vcf {
+func callGenotypes(ref *fasta.Seeker, region bed.Bed, minReads int, enclosingReads [][]*sam.Sam, observedLengths [][]int, mm []*gmm.MixtureModel) (vcf.Vcf, bool) {
 	var ans vcf.Vcf
 	repeatUnitLen, refNumRepeats := parseRepeatSeq(region.Name)
 	refRepeatLen := refNumRepeats * len(repeatUnitLen)
@@ -217,54 +219,86 @@ func callGenotypes(ref *fasta.Seeker, region bed.Bed, minReads int, enclosingRea
 	exception.PanicOnErr(err)
 	dna.AllToUpper(refSeq)
 	ans.Ref = dna.BasesToString(refSeq)
+	ans.Ref = "*" // TODO Remove
 	//if len(ans.Ref) != refRepeatLen {
 	//	log.Panicf("ERROR: %s ref seq is \n%s\n the length of %d does not match expected %d from bed file.", region, ans.Ref[1:], len(ans.Ref), refRepeatLen)
 	//}
 
 	ans.Id = region.Name
-	altLens := make([]int, 2)
-	var refLenDiff int
-	for i, l := range mm.Means {
-		altLens[i] = int(math.Round(l))
-		refLenDiff = refRepeatLen - altLens[i]
-		for _, alts := range ans.Alt {
-			if len(alts) == altLens[i] {
-				refLenDiff = 0 // to engage break below
+
+	/*
+		altLens := make([]int, 2)
+		var refLenDiff int
+		for i, l := range mm[0].Means {
+			altLens[i] = int(math.Round(l))
+			refLenDiff = refRepeatLen - altLens[i]
+			for _, alts := range ans.Alt {
+				if len(alts) == altLens[i] {
+					refLenDiff = 0 // to engage break below
+				}
 			}
+			if refLenDiff == 0 {
+				continue
+			}
+			ans.Alt = append(ans.Alt, ans.Ref[0:len(ans.Ref)-refLenDiff-1])
 		}
-		if refLenDiff == 0 {
+	*/
+	ans.Alt = append(ans.Alt, "*")
+	ans.Filter = "."
+	ans.Id = region.Name
+	ans.Format = []string{"GT", "DP", "MU", "SD", "WT", "LL"}
+	ans.Samples = make([]vcf.Sample, len(mm))
+	for i := range ans.Samples {
+		ans.Samples[i].FormatData = make([]string, 6)
+		ans.Samples[i].FormatData[1] = fmt.Sprintf("%d", len(observedLengths[i]))
+		if mm[i].LogLikelihood == math.MaxFloat64 {
+			ans.Samples[i].FormatData[2] = "."
+			ans.Samples[i].FormatData[3] = "."
+			ans.Samples[i].FormatData[4] = "."
+			ans.Samples[i].FormatData[5] = "."
 			continue
 		}
-		ans.Alt = append(ans.Alt, ans.Ref[0:len(ans.Ref)-refLenDiff-1])
+
+		if mm[i].Means[0] < mm[i].Means[1] {
+			ans.Samples[i].FormatData[2] = fmt.Sprintf("%.1f,%.1f", mm[i].Means[0], mm[i].Means[1])
+			ans.Samples[i].FormatData[3] = fmt.Sprintf("%.1f,%.1f", mm[i].Stdev[0], mm[i].Stdev[1])
+			ans.Samples[i].FormatData[4] = fmt.Sprintf("%.1f,%.1f", mm[i].Weights[0], mm[i].Weights[1])
+		} else {
+			ans.Samples[i].FormatData[2] = fmt.Sprintf("%.1f,%.1f", mm[i].Means[1], mm[i].Means[0])
+			ans.Samples[i].FormatData[3] = fmt.Sprintf("%.1f,%.1f", mm[i].Stdev[1], mm[i].Stdev[0])
+			ans.Samples[i].FormatData[4] = fmt.Sprintf("%.1f,%.1f", mm[i].Weights[1], mm[i].Weights[0])
+		}
+		ans.Samples[i].FormatData[5] = fmt.Sprintf("%.1g", mm[i].LogLikelihood)
 	}
 
 	info := new(strings.Builder)
 	info.WriteString(fmt.Sprintf("RefLength=%d", refRepeatLen))
-	info.WriteString(";Means=")
-	for i, j := range mm.Means {
-		if i > 0 {
-			info.WriteByte(',')
+	/*
+		info.WriteString(";Means=")
+		for i, j := range mm[0].Means {
+			if i > 0 {
+				info.WriteByte(',')
+			}
+			info.WriteString(fmt.Sprintf("%.1f", j))
 		}
-		info.WriteString(fmt.Sprintf("%f", j))
-	}
-	info.WriteString(";Stdev=")
-	for i, j := range mm.Stdev {
-		if i > 0 {
-			info.WriteByte(',')
+		info.WriteString(";Stdev=")
+		for i, j := range mm[0].Stdev {
+			if i > 0 {
+				info.WriteByte(',')
+			}
+			info.WriteString(fmt.Sprintf("%.1f", j))
 		}
-		info.WriteString(fmt.Sprintf("%f", j))
-	}
-	info.WriteString(";Weights=")
-	for i, j := range mm.Weights {
-		if i > 0 {
-			info.WriteByte(',')
+		info.WriteString(";Weights=")
+		for i, j := range mm[0].Weights {
+			if i > 0 {
+				info.WriteByte(',')
+			}
+			info.WriteString(fmt.Sprintf("%.1f", j))
 		}
-		info.WriteString(fmt.Sprintf("%f", j))
-	}
+	*/
 	ans.Info = info.String()
 
-	fmt.Println(ans)
-	return ans
+	return ans, true
 }
 
 func getLenghtDist(enclosingReads []*sam.Sam, targetPadding, minMapQ, minFlankOverlap int, removeDups bool, bamIdx sam.Bai, region bed.Bed, br *sam.BamReader, bamOut *sam.BamWriter, alignerInput chan<- sam.Sam, alignerOutput <-chan sam.Sam) ([]*sam.Sam, []int) {
