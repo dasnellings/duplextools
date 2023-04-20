@@ -1,9 +1,5 @@
 github.com/guptarohit/asciigraph v0.5.5 h1:ccFnUF8xYIOUPPY3tmdvRyHqmn1MYI9iv1pLKX+/ZkQ=
 github.com/guptarohit/asciigraph v0.5.5/go.mod h1:dYl5wwK4gNsnFf9Zp+l06rFiDZ5YtXM6x7SRWZ3KGag=
-github.com/vertgenlab/gonomics v0.0.0-20230227214505-2b506bfbcbae h1:2l06oqpGIbuwQkCSTmXo1lyVrhBk0OHc1RnBj8r1MnM=
-github.com/vertgenlab/gonomics v0.0.0-20230227214505-2b506bfbcbae/go.mod h1:RaxcRybcD8qdv92oUS+z0eJvjdV7Hg1xg1H7468ptfA=
-github.com/vertgenlab/gonomics v0.0.0-20230321122358-6e8de24aa5bc h1:gsMwrEJEoUB9+TxR/+FAp3AkfzQ+p1f2Rm2e3TjsnpQ=
-github.com/vertgenlab/gonomics v0.0.0-20230321122358-6e8de24aa5bc/go.mod h1:3n7bMTeAkw3/IE1YfaGrqTgpfhydWykh22HF/5BS6Fk=
 github.com/vertgenlab/gonomics v0.0.0-20230404195548-34c991d36f87 h1:tiaOuspm9yO3NKKs57d5HagJTu+7pS/cZJOAq4UbwQE=
 github.com/vertgenlab/gonomics v0.0.0-20230404195548-34c991d36f87/go.mod h1:3n7bMTeAkw3/IE1YfaGrqTgpfhydWykh22HF/5BS6Fk=
 github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=

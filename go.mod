@@ -1,6 +1,6 @@
 module github.com/dasnellings/MCS_MS
 
-go 1.18
+go 1.20
 
 require (
 	github.com/guptarohit/asciigraph v0.5.5

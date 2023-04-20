@@ -56,7 +56,8 @@ func main() {
 	var ref *string = flag.String("r", "", "Reference genome. Must be the same reference used for generating the BAM file.")
 	var targets *string = flag.String("t", "", "BED file of targeted repeats. The 4th column must be the sequence of one repeat unit (e.g. CA for a CACACACA repeat), or 'RepeatLen'x'RepeatSeq' (e.g. 10xCA).")
 	var output *string = flag.String("o", "stdout", "Output VCF file.")
-	var bamOut *string = flag.String("bamOutPfx", "", "Output a BAM file with realigned reads. Only outputs reads that inform called genotypes. File will be name 'bamOutPfx'_'originalFilename'.")
+	var lenOut *string = flag.String("lenOut", "", "Output a bed file with additional columns for determined read lengths for each sample.")
+	var bamOut *string = flag.String("bamOutPfx", "", "Output a BAM file with realigned reads. Only outputs reads that inform called genotypes. File will be named 'bamOutPfx'_'originalFilename'.")
 	var targetPadding *int = flag.Int("tPad", 50, "Add INT bases of padding to either end of regions in targets file for selecting reads for realignment.")
 	var minFlankOverlap *int = flag.Int("minFlank", 4, "A minimum of INT bases must be mapped on either side of the repeat to be considered an enclosing read.")
 	var minMapQ *int = flag.Int("minMapQ", -1, "Minimum mapping quality (before realignment) to be considered for genotyping. Set to -1 for no filter.")
@@ -74,7 +75,7 @@ func main() {
 		if err != nil {
 			log.Fatal("could not create CPU profile: ", err)
 		}
-		defer f.Close() // error handling omitted for example
+		defer f.Close()
 		if err := pprof.StartCPUProfile(f); err != nil {
 			log.Fatal("could not start CPU profile: ", err)
 		}
@@ -92,7 +93,7 @@ func main() {
 		log.Fatalf("minMapQ out of range. max: %d\n", math.MaxUint8)
 	}
 
-	genotypeTargetRepeats(inputs, *ref, *targets, *output, *bamOut, *targetPadding, *minFlankOverlap, *minMapQ, *minReads, !*allowDups, *alignerThreads)
+	genotypeTargetRepeats(inputs, *ref, *targets, *output, *bamOut, *lenOut, *targetPadding, *minFlankOverlap, *minMapQ, *minReads, !*allowDups, *alignerThreads)
 
 	if *memprofile != "" {
 		f, err := os.Create(*memprofile)
@@ -107,11 +108,13 @@ func main() {
 	}
 }
 
-func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile, bamOutPfx string, targetPadding, minFlankOverlap, minMapQ, minReads int, removeDups bool, alignerThreads int) {
+func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile, bamOutPfx, lenOutFile string, targetPadding, minFlankOverlap, minMapQ, minReads int, removeDups bool, alignerThreads int) {
 	var err error
 	var ref *fasta.Seeker
+	var lenOut *fileio.EasyWriter
 	targets := bed.Read(targetsFile)
 	vcfOut := fileio.EasyCreate(outputFile)
+	defer cleanup(vcfOut)
 	vcfHeader := generateVcfHeader(strings.Join(inputFiles, "\t"))
 	vcf.NewWriteHeader(vcfOut, vcfHeader)
 
@@ -121,6 +124,7 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 	bamIdxs := make([]sam.Bai, len(inputFiles))
 	for i := range inputFiles {
 		br[i], headers[i] = sam.OpenBam(inputFiles[i])
+		defer cleanup(br[i])
 		if _, err = os.Stat(inputFiles[i] + ".bai"); !errors.Is(err, os.ErrNotExist) {
 			bamIdxs[i] = sam.ReadBai(inputFiles[i] + ".bai")
 		} else {
@@ -136,26 +140,40 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 			words[len(words)-1] = bamOutPfx + "_" + words[len(words)-1]
 			bamOutHandle[i] = fileio.EasyCreate(words[len(words)-1])
 			bamOut[i] = sam.NewBamWriter(bamOutHandle[i], headers[i])
+			defer cleanup(bamOutHandle[i])
+			defer cleanup(bamOut[i])
 		}
+	}
+
+	if lenOutFile != "" {
+		lenOut = fileio.EasyCreate(lenOutFile)
+		fmt.Fprintf(lenOut, "#CHROM\tSTART\tEND\tREPEAT\t%s\n", strings.Join(inputFiles, "\t"))
+		defer cleanup(lenOut)
 	}
 
 	enclosingReads := make([][]*sam.Sam, len(inputFiles)) // first index is sample
 	observedLengths := make([][]int, len(inputFiles))     // first index is sample
 	var currVcf vcf.Vcf
-	var i int
 	alignerInput := make(chan sam.Sam, 100)
 	alignerOutput := make(chan sam.Sam, 100)
 	for j := 0; j < alignerThreads; j++ {
 		ref = fasta.NewSeeker(refFile, "")
-		defer ref.Close()
+		defer cleanup(ref)
 		go realign.RealignIndels(alignerInput, alignerOutput, ref)
 	}
-	mm := new(gmm.MixtureModel)
+
+	mm := make([]*gmm.MixtureModel, len(inputFiles))
+	for i := 0; i < len(inputFiles); i++ {
+		mm[i] = new(gmm.MixtureModel)
+	}
+	tmpMm := new(gmm.MixtureModel)
+
 	gaussians := make([][]float64, 2)
 	var floatSlice []float64
-	var converged bool
+	var converged, anyConverged bool
 	for _, region := range targets {
-		for i = range inputFiles {
+		anyConverged = false
+		for i := range inputFiles {
 			enclosingReads[i], observedLengths[i] = getLenghtDist(enclosingReads[i], targetPadding, minMapQ, minFlankOverlap, removeDups, bamIdxs[i], region, br[i], bamOut[i], alignerInput, alignerOutput)
 			if bamOutPfx != "" {
 				for j := range enclosingReads[i] {
@@ -163,38 +181,30 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 				}
 			}
 			slices.Sort(observedLengths[i])
+
+			converged, tmpMm, mm[i] = runMixtureModel(observedLengths[0], tmpMm, mm[i], &floatSlice)
+			if converged {
+				anyConverged = true
+			}
 		}
 
-		// TODO add idx for bulk sample
-		converged = runMixtureModel(observedLengths[0], mm, &floatSlice)
-		if !converged {
+		if !anyConverged {
 			continue
 		}
 
+		if lenOut != nil {
+			fmt.Fprintf(lenOut, "%s%s\n", bed.ToString(region, 4), printLengths(observedLengths))
+		}
+
 		if debug > 0 {
-			fmt.Println(region, len(observedLengths), printLengths(observedLengths))
-			fmt.Println(mm.Means)
+			plot(observedLengths, minReads, mm, gaussians)
 		}
-		if debug > 1 {
-			gaussians[0] = gaussianHist(mm.Weights[0], mm.Means[0], mm.Stdev[0])
-			gaussians[1] = gaussianHist(mm.Weights[1], mm.Means[1], mm.Stdev[1])
-			plot(observedLengths, minReads, gaussians)
-		}
+
 		//currVcf = callGenotypes(ref, region, minReads, enclosingReads, observedLengths, mm)
 		vcf.WriteVcf(vcfOut, currVcf)
 	}
 	close(alignerInput)
 	close(alignerOutput)
-
-	for i = range inputFiles {
-		err = br[i].Close()
-		exception.PanicOnErr(err)
-		err = bamOut[i].Close()
-		exception.PanicOnErr(err)
-		err = bamOutHandle[i].Close()
-	}
-	err = vcfOut.Close()
-	exception.PanicOnErr(err)
 }
 
 func callGenotypes(ref *fasta.Seeker, region bed.Bed, minReads int, enclosingReads [][]*sam.Sam, observedLengths [][]int, mm *gmm.MixtureModel) vcf.Vcf {
@@ -477,7 +487,7 @@ func generateVcfHeader(samples string) vcf.Header {
 	return header
 }
 
-func plot(observedLengths [][]int, minReads int, gaussians [][]float64) {
+func plot(observedLengths [][]int, minReads int, mm []*gmm.MixtureModel, gaussians [][]float64) {
 	readsPerSample := make([]int, len(observedLengths))
 	p := make([][]float64, len(observedLengths))
 	for i := range observedLengths {
@@ -490,18 +500,6 @@ func plot(observedLengths [][]int, minReads int, gaussians [][]float64) {
 	if len(observedLengths) == 1 && readsPerSample[0] < minReads {
 		return
 	}
-	fmt.Println(asciigraph.PlotMany(gaussians, asciigraph.Precision(0), asciigraph.SeriesColors(
-		asciigraph.Red,
-		asciigraph.Yellow,
-		asciigraph.Green,
-		asciigraph.Blue,
-		asciigraph.Cyan,
-		asciigraph.BlueViolet,
-		asciigraph.Brown,
-		asciigraph.Gray,
-		asciigraph.Orange,
-		asciigraph.Olive,
-	), asciigraph.Height(10)))
 
 	for i := range p {
 		if readsPerSample[i] < minReads {
@@ -511,6 +509,22 @@ func plot(observedLengths [][]int, minReads int, gaussians [][]float64) {
 		//	continue
 		//}
 		fmt.Println(asciigraph.Plot(p[i], asciigraph.Height(5), asciigraph.Precision(0), asciigraph.SeriesColors(asciigraph.AnsiColor(i))))
+
+		gaussians[0] = gaussianHist(mm[i].Weights[0], mm[i].Means[0], mm[i].Stdev[0])
+		gaussians[1] = gaussianHist(mm[i].Weights[1], mm[i].Means[1], mm[i].Stdev[1])
+
+		fmt.Println(asciigraph.PlotMany(gaussians, asciigraph.Precision(0), asciigraph.SeriesColors(
+			asciigraph.Red,
+			asciigraph.Yellow,
+			asciigraph.Green,
+			asciigraph.Blue,
+			asciigraph.Cyan,
+			asciigraph.BlueViolet,
+			asciigraph.Brown,
+			asciigraph.Gray,
+			asciigraph.Orange,
+			asciigraph.Olive,
+		), asciigraph.Height(10)))
 	}
 
 	//fmt.Println(asciigraph.PlotMany(p, asciigraph.Precision(0), asciigraph.SeriesColors(
@@ -548,6 +562,7 @@ func printLengths(a [][]int) string {
 	s := new(strings.Builder)
 	for i := range a {
 		if len(a[i]) == 0 {
+			s.WriteString("\tNA")
 			continue
 		}
 		s.WriteString(fmt.Sprintf("\t%d", a[i][0]))
@@ -558,7 +573,7 @@ func printLengths(a [][]int) string {
 	return s.String()
 }
 
-func runMixtureModel(data []int, mm *gmm.MixtureModel, f *[]float64) bool {
+func runMixtureModel(data []int, mm, bestMm *gmm.MixtureModel, f *[]float64) (converged bool, newMm, newBestMm *gmm.MixtureModel) {
 	if cap(*f) >= len(data) {
 		*f = (*f)[0:len(data)]
 	} else {
@@ -568,6 +583,21 @@ func runMixtureModel(data []int, mm *gmm.MixtureModel, f *[]float64) bool {
 	for i := range data {
 		(*f)[i] = float64(data[i])
 	}
-	converged, _ := gmm.RunMixtureModel(*f, 2, 50, 50, mm)
-	return converged
+
+	for i := 0; i < 10; i++ {
+		converged, _ = gmm.RunMixtureModel(*f, 2, 50, 50, mm)
+		if i == 0 {
+			mm, bestMm = bestMm, mm
+			continue
+		}
+		if mm.LogLikelihood < bestMm.LogLikelihood {
+			mm, bestMm = bestMm, mm
+		}
+	}
+	return converged, mm, bestMm
+}
+
+func cleanup(f io.Closer) {
+	err := f.Close()
+	exception.PanicOnErr(err)
 }
