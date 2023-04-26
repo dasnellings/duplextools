@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/dasnellings/MCS_MS/fai"
 	"github.com/dasnellings/MCS_MS/gmm"
 	"github.com/dasnellings/MCS_MS/realign"
 	"github.com/guptarohit/asciigraph"
@@ -115,7 +116,7 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 	targets := bed.Read(targetsFile)
 	vcfOut := fileio.EasyCreate(outputFile)
 	defer cleanup(vcfOut)
-	vcfHeader := generateVcfHeader(strings.Join(inputFiles, "\t"))
+	vcfHeader := generateVcfHeader(strings.Join(inputFiles, "\t"), refFile)
 	vcf.NewWriteHeader(vcfOut, vcfHeader)
 
 	// get bam reader for each file
@@ -514,10 +515,19 @@ func resetEnclosingReads(s []*sam.Sam, len int) []*sam.Sam {
 	return s
 }
 
-func generateVcfHeader(samples string) vcf.Header {
+func generateVcfHeader(samples string, referenceFile string) vcf.Header {
 	var header vcf.Header
 	header.Text = append(header.Text, "##fileformat=VCFv4.2")
-	header.Text = append(header.Text, fmt.Sprintf("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t%s", samples))
+	header.Text = append(header.Text, fmt.Sprintf("##reference=%s", referenceFile))
+	header.Text = append(header.Text, strings.TrimSuffix(fai.IndexToVcfHeader(fai.ReadIndex(referenceFile+".fai")), "\n"))
+	header.Text = append(header.Text, "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">")
+	header.Text = append(header.Text, "##FORMAT=<ID=DP,Number=1,Type=Integer,Description=\"Total Read Depth\">")
+	header.Text = append(header.Text, "##FORMAT=<ID=MU,Number=2,Type=Float,Description=\"Mean repeat length of each allele determined by gaussian mixture modelling.\">")
+	header.Text = append(header.Text, "##FORMAT=<ID=SD,Number=2,Type=Float,Description=\"Standard deviation of the repeat length of each allele determined by gaussian mixture modelling.\">")
+	header.Text = append(header.Text, "##FORMAT=<ID=WT,Number=2,Type=Float,Description=\"Weight assigned to each allele (rough estimate of allele frequency) determined by gaussian mixture modelling.\">")
+	header.Text = append(header.Text, "##FORMAT=<ID=LL,Number=1,Type=Float,Description=\"Negative log likelihood of gaussian mixture model.\">")
+	header.Text = append(header.Text, "##INFO=<ID=RefLength,Number=1,Type=Integer,Description=\"Length in bp of the repeat in the reference genome.\">")
+	header.Text = append(header.Text, fmt.Sprintf("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t%s", strings.Replace(samples, ".bam", "", -1)))
 	return header
 }
 
