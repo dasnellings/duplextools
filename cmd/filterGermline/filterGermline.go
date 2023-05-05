@@ -65,6 +65,8 @@ func handleInputs(input, output, genomicBam, genomicVcf string, minCoverage int,
 
 	//err = ref.Close()
 	//exception.PanicOnErr(err)
+	err = out.Close()
+	exception.PanicOnErr(err)
 	err = gBam.Close()
 	exception.PanicOnErr(err)
 	err = out.Close()
