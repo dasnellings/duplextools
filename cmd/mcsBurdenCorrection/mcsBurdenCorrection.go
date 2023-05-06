@@ -18,7 +18,7 @@ import (
 
 func usage() {
 	fmt.Print(
-		"mcsBurdenCorrection - Correct META-CS mutation burden for trinucleotide context bias and allele count.\n" +
+		"mcsBurdenCorrection - Correct META-CS mutation burden for trinucleotide (or other) context bias and allele count.\n" +
 			"Applies method used for NanoSeq (for more information see Abascal et al. 2021 PMID: 33911282 \n" +
 			"Usage:\n" +
 			"mcsBurdenCorrection [options] -i input.vcf -b readFamilies.bed -r reference.fasta > summary.tsv\n\n")
@@ -84,6 +84,54 @@ func mcsBurdenCorrection(invcf, bedfile, fastafile, output string, pad, verbose 
 	stepOneWg.Wait()
 	stepTwoWg.Wait()
 	stepThreeWg.Wait()
+
+	// STEP 4: Determine the frequency of each context in the genome
+	genomeFreqMap := make(map[string]float64)
+	getContextFreq(genomeFreqMap, genomeContextMap)
+
+	// STEP 5: Determine the frequency of each context in the observed data
+	observedFreqMap := make(map[string]float64)
+	getContextFreq(observedFreqMap, observedContextMap)
+
+	// STEP 6: Get ratio of genome-wide to observed context frequencies for each context
+	contextRatio := make(map[string]float64)
+	for context := range genomeFreqMap {
+		contextRatio[context] = genomeFreqMap[context] / observedFreqMap[context]
+	}
+
+	// STEP 7: Adjust mutation counts by context ratio
+	var mutationBurden, adjCount float64
+	adjVcfContextMap := make(map[string]map[string]float64)
+	for mutation, contextMap := range vcfContextMap {
+		adjVcfContextMap[mutation] = make(map[string]float64)
+		for context, count := range contextMap {
+			adjCount = float64(count) * contextRatio[context]
+			adjVcfContextMap[mutation][context] = adjCount
+			mutationBurden += adjCount
+		}
+	}
+
+	// STEP 8: Calculate burden per base per genome
+	var adjMutationBurden float64
+	adjMutationBurden = mutationBurden / float64(sumMap(observedContextMap))
+
+	fmt.Println(adjMutationBurden) // TODO make output files
+}
+
+func getContextFreq(freq map[string]float64, count map[string]int) {
+	sum := float64(sumMap(count))
+
+	for key, val := range count {
+		freq[key] = float64(val) / sum
+	}
+}
+
+func sumMap(m map[string]int) int {
+	var ans int
+	for _, val := range m {
+		ans += val
+	}
+	return ans
 }
 
 func getObservedContext(m map[string]int, bedfile string, ref *fasta.Seeker, pad int, wg *sync.WaitGroup, verbose int) {
