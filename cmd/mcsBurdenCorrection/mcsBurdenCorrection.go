@@ -171,7 +171,6 @@ func mcsBurdenCorrection(invcf, bedfile, fastafile, output string, pad, btrim, v
 	}
 
 	fmt.Fprintln(out, getOutput(mutationCount, mutationBurden, adjMutationBurden, genomeContextMap, observedContextMap, genomeFreqMap, observedFreqMap, contextRatio, vcfContextMap, adjVcfContextMap))
-	log.Println(adjMutationBurden) // TODO make output files
 }
 
 func getOutput(mutationCount int, adjMutationCount float64, adjMutationBurden float64, genomeContextMap, observedContextMap map[string]int, genomeFreqMap, observedFreqMap, contextRatio map[string]float64, vcfContextMap map[string]map[string]int, adjVcfContextMap map[string]map[string]float64) string {
