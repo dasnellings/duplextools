@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/vertgenlab/gonomics/bed"
+	"github.com/vertgenlab/gonomics/chromInfo"
 	"github.com/vertgenlab/gonomics/dna"
 	"github.com/vertgenlab/gonomics/exception"
 	"github.com/vertgenlab/gonomics/fileio"
@@ -65,8 +66,6 @@ func handleInputs(input, output, genomicBam, genomicVcf string, minCoverage int,
 
 	//err = ref.Close()
 	//exception.PanicOnErr(err)
-	err = out.Close()
-	exception.PanicOnErr(err)
 	err = gBam.Close()
 	exception.PanicOnErr(err)
 	err = out.Close()
@@ -78,8 +77,21 @@ func filterGermline(inChan <-chan vcf.Vcf, out *fileio.EasyWriter, gBam *sam.Bam
 	var p sam.Pile
 	var maxReads, obsReads, delLen int
 	var altBase dna.Base
+	var prevChr string
 	// loop over each variant in input and determine if it belongs in output
 	for v := range inChan {
+		if prevChr == "" {
+			prevChr = v.Chr
+		}
+
+		if v.Chr != prevChr {
+			if !checkChr(v.Chr, gBamHeader.Chroms) {
+				log.Printf("WARNING: %s present in VCF, but not in bam file. Skipping variant.\n", v.Chr)
+				continue
+			}
+			prevChr = v.Chr
+		}
+
 		if len(interval.Query(excludeTree, v, "any")) > 0 {
 			continue
 		}
@@ -135,6 +147,7 @@ func retrievePile(v vcf.Vcf, gBam *sam.BamReader, gBai sam.Bai, gBamHeader sam.H
 		stop++
 		pos++
 	}
+
 	reads = sam.SeekBamRegionRecycle(gBam, gBai, v.Chr, start, stop, reads)
 	for i := range reads {
 		maskLowQualityBases(&reads[i], minBaseQuality)
@@ -199,4 +212,13 @@ func maskLowQualityBases(s *sam.Sam, minQual int) {
 			s.Seq[i] = dna.N
 		}
 	}
+}
+
+func checkChr(chr string, list []chromInfo.ChromInfo) bool {
+	for i := range list {
+		if list[i].Name == chr {
+			return true
+		}
+	}
+	return false
 }
