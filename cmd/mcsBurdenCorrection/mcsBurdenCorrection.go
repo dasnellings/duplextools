@@ -164,19 +164,21 @@ func mcsBurdenCorrection(invcf, bedfile, fastafile, output string, pad, btrim, v
 
 	// STEP 8: Calculate burden per base per genome
 	var adjMutationBurden float64
-	adjMutationBurden = mutationBurden / float64(sumMap(observedContextMap))
+	var experimentalCoverage int = sumMap(observedContextMap)
+	adjMutationBurden = mutationBurden / float64(experimentalCoverage)
 
 	if verbose > 0 {
 		log.Println(getVcfContextOutput(vcfContextMap, adjVcfContextMap))
 	}
 
-	fmt.Fprintln(out, getOutput(mutationCount, mutationBurden, adjMutationBurden, genomeContextMap, observedContextMap, genomeFreqMap, observedFreqMap, contextRatio, vcfContextMap, adjVcfContextMap))
+	fmt.Fprintln(out, getOutput(mutationCount, mutationBurden, experimentalCoverage, adjMutationBurden, genomeContextMap, observedContextMap, genomeFreqMap, observedFreqMap, contextRatio, vcfContextMap, adjVcfContextMap))
 }
 
-func getOutput(mutationCount int, adjMutationCount float64, adjMutationBurden float64, genomeContextMap, observedContextMap map[string]int, genomeFreqMap, observedFreqMap, contextRatio map[string]float64, vcfContextMap map[string]map[string]int, adjVcfContextMap map[string]map[string]float64) string {
+func getOutput(mutationCount int, adjMutationCount float64, experimentalCoverage int, adjMutationBurden float64, genomeContextMap, observedContextMap map[string]int, genomeFreqMap, observedFreqMap, contextRatio map[string]float64, vcfContextMap map[string]map[string]int, adjVcfContextMap map[string]map[string]float64) string {
 	var ans []string
 	ans = append(ans, fmt.Sprintf("Mutation Count:\t%d", mutationCount))
 	ans = append(ans, fmt.Sprintf("Adjusted Mutation Count:\t%0.2f", adjMutationCount))
+	ans = append(ans, fmt.Sprintf("Experimental Coverage:\t%d", experimentalCoverage))
 	ans = append(ans, fmt.Sprintf("Adjusted Mutation Burden:\t%0.6g", adjMutationBurden))
 	ans = append(ans, "#") // newline for aesthetics
 	ans = append(ans, "#") // newline for aesthetics
