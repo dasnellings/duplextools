@@ -14,6 +14,7 @@ import (
 	"github.com/vertgenlab/gonomics/interval"
 	"github.com/vertgenlab/gonomics/sam"
 	"github.com/vertgenlab/gonomics/vcf"
+	"golang.org/x/exp/maps"
 	"golang.org/x/exp/slices"
 	"io"
 	"log"
@@ -59,7 +60,7 @@ func main() {
 	flag.Var(&excludeBeds, "e", "Bed file(s) with regions to exclude from analysis. May be declared more than once with additional -e flags. Strongly recommended to mask regions with poor mappability.")
 	ref := flag.String("r", "", "Fasta file with reference genome used to align input bam. Must be indexed.")
 	totalDepth := flag.Int("a", 8, "Minimum total depth of read family for variant consideration.")
-	strandedDepth := flag.Int("s", 4, "Minimum depth of independent watson and crick strands for variant consideration")
+	strandedDepth := flag.Int("s", 4, "Minimum depth of independent watson and crick strands for variant consideration. When set to 0, caller runs in unstranded mode merging read counts from watson and crick strands.")
 	endPad := flag.Int("ignoreEnds", 3, "Ignore bases within # of end of a read.")
 	minMapQ := flag.Int("minMapQ", 20, "Minimum mapping quality.")
 	allowSuppAln := flag.Bool("allowSupplementaryAlignments", false, "Allow variants using reads that have supplementary alignments annotated.")
@@ -214,7 +215,6 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker
 		if hasSuppAln(reads[i]) && !allowSuppAln {
 			continue
 		}
-
 		clipReadEnds(&reads[i], endPad)
 		maskLowQualityBases(&reads[i], minBaseQuality)
 
@@ -267,13 +267,38 @@ func pilesToVcfs(watsonPiles, crickPiles []sam.Pile, minAf, baseQualPenalty floa
 			crickPileIdx++
 			continue
 		}
-
 		v, keeper = callFromPilePair(watsonPiles[watsonPileIdx], crickPiles[crickPileIdx], minAf, baseQualPenalty, minStrandedDepth, minTotalDepth, header, faSeeker, b, debugOutChan)
 		if keeper {
 			variants = append(variants, v)
 		}
 
 		watsonPileIdx++
+		crickPileIdx++
+	}
+
+	// do not include single-stranded data if not running in unstranded mode
+	if !(minStrandedDepth == 0 && (watsonPileIdx < len(watsonPiles) || crickPileIdx < len(crickPiles))) {
+		return variants
+	}
+
+	// unstranded mode only below
+	var emptyPile sam.Pile
+	for watsonPileIdx < len(watsonPiles) {
+		emptyPile.Pos = watsonPiles[watsonPileIdx].Pos
+		emptyPile.RefIdx = watsonPiles[watsonPileIdx].RefIdx
+		v, keeper = callFromPilePair(watsonPiles[watsonPileIdx], emptyPile, minAf, baseQualPenalty, minStrandedDepth, minTotalDepth, header, faSeeker, b, debugOutChan)
+		if keeper {
+			variants = append(variants, v)
+		}
+		watsonPileIdx++
+	}
+	for crickPileIdx < len(crickPiles) {
+		emptyPile.Pos = crickPiles[crickPileIdx].Pos
+		emptyPile.RefIdx = crickPiles[crickPileIdx].RefIdx
+		v, keeper = callFromPilePair(emptyPile, crickPiles[crickPileIdx], minAf, baseQualPenalty, minStrandedDepth, minTotalDepth, header, faSeeker, b, debugOutChan)
+		if keeper {
+			variants = append(variants, v)
+		}
 		crickPileIdx++
 	}
 	return variants
@@ -292,15 +317,20 @@ func callFromPilePair(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 	watsonDepth := pileDepth(wPile, baseQualPenalty)
 	crickDepth := pileDepth(cPile, baseQualPenalty)
 
+	if debugOutChan != nil {
+		debugOutChan <- fmt.Sprintf("watson: %v, crick: %v", wPile, cPile)
+	}
+
+	// switch to unstranded calling mode if minStrandDepth == 0
+	if minStrandedDepth == 0 {
+		return unstrandedCall(wPile, cPile, minAf, baseQualPenalty, minStrandedDepth, minTotalDepth, header, faSeeker, b, debugOutChan, watsonDepth+crickDepth)
+	}
+
 	//fmt.Printf("evaluating pile %s:%d\nwatson:\t%v\ncrick:\t%v\n\n", header.Chroms[wPile.RefIdx].Name, wPile.Pos, wPile, cPile)
 
 	// matching ref position
 	watsonVarType, maxWatsonBase, watsonInsSeq, watsonDelLen, watsonAltAlleleCount, watsonInsAlleleCount = maxBase(wPile)
 	crickVarType, maxCrickBase, crickInsSeq, crickDelLen, crickAltAlleleCount, crickInsAlleleCount = maxBase(cPile)
-
-	if debugOutChan != nil {
-		debugOutChan <- fmt.Sprintf("watson: %v, crick: %v", wPile, cPile)
-	}
 
 	// special case to bias towards insertions since they are assigned to the position before the insertion
 	if float64(watsonInsAlleleCount)/float64(watsonDepth) > minAf || float64(crickInsAlleleCount)/float64(crickDepth) > minAf {
@@ -313,7 +343,7 @@ func callFromPilePair(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 		}
 	}
 
-	// exclude if watson and crick do not agree
+	// exclude if watson and crick do not agree.
 	if watsonVarType != crickVarType {
 		if debugOutChan != nil {
 			debugOutChan <- fmt.Sprintf("variant types do not match, moving on")
@@ -380,6 +410,104 @@ func callFromPilePair(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 	}
 
 	return ans, true
+}
+
+func unstrandedCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, minStrandedDepth, minTotalDepth int, header sam.Header, faSeeker *fasta.Seeker, b bed.Bed, debugOutChan chan<- string, mergeDepth int) (vcf.Vcf, bool) {
+	var mergeDelLen int
+	var mergeInsSeq, chr string
+	var maxMergeBase dna.Base
+	var refBase []dna.Base
+	var mergeVarType variantType
+	var mergeAltAlleleCount, mergeInsAlleleCount int
+	var err error
+	var ans vcf.Vcf
+
+	mergePile := sumPiles(wPile, cPile)
+
+	mergeVarType, maxMergeBase, mergeInsSeq, mergeDelLen, mergeAltAlleleCount, mergeInsAlleleCount = maxBase(mergePile)
+
+	if float64(mergeInsAlleleCount)/float64(mergeDepth) > minAf {
+		mergeVarType = insertion
+		mergeAltAlleleCount = mergeInsAlleleCount
+		if debugOutChan != nil {
+			debugOutChan <- fmt.Sprintf("triggered insertion bias")
+		}
+	}
+
+	// exclude if watson or crick AF is less than threshold.
+	if float64(mergeAltAlleleCount)/float64(mergeDepth) < minAf {
+		if debugOutChan != nil {
+			debugOutChan <- fmt.Sprintf("does not meet af requirements\nmerge: (%d/%d) = %f\n", mergeAltAlleleCount, mergeDepth, float64(mergeAltAlleleCount)/float64(mergeDepth))
+		}
+		return ans, false
+	}
+
+	// exclude if below minimum read depth
+	if mergeAltAlleleCount < minStrandedDepth || mergeDepth < minTotalDepth {
+		if debugOutChan != nil {
+			debugOutChan <- fmt.Sprintf("does not meet minimum read depth, moving on")
+		}
+		return ans, false
+	}
+
+	// variant-type specific filters and processing
+	chr = header.Chroms[wPile.RefIdx].Name
+	switch mergeVarType {
+	case snv:
+		refBase, err = fasta.SeekByName(faSeeker, chr, int(wPile.Pos-1), int(wPile.Pos))
+		dna.AllToUpper(refBase)
+		exception.PanicOnErr(err)
+
+		if maxMergeBase == refBase[0] {
+			if debugOutChan != nil {
+				debugOutChan <- fmt.Sprintf("alt base matches ref")
+			}
+			return ans, false
+		}
+		ans = snvToVcf(wPile, cPile, chr, refBase[0], maxMergeBase, b.Name)
+
+	case insertion:
+		ans = insToVcf(wPile, cPile, chr, mergeInsSeq, faSeeker, b.Name)
+
+	case deletion:
+		ans = delToVcf(wPile, cPile, chr, mergeDelLen, faSeeker, b.Name)
+	}
+
+	return ans, true
+}
+
+func sumPiles(a, b sam.Pile) sam.Pile {
+	var ans sam.Pile
+	ans.Pos = a.Pos
+	ans.RefIdx = a.RefIdx
+	for i := range ans.CountF {
+		ans.CountF[i] = a.CountF[i] + b.CountF[i]
+		ans.CountR[i] = a.CountR[i] + b.CountR[i]
+	}
+
+	ans.InsCountF = make(map[string]int)
+	ans.InsCountR = make(map[string]int)
+	ans.DelCountF = make(map[int]int)
+	ans.DelCountR = make(map[int]int)
+
+	maps.Copy(ans.InsCountF, a.InsCountF)
+	maps.Copy(ans.InsCountR, a.InsCountR)
+	maps.Copy(ans.DelCountF, a.DelCountF)
+	maps.Copy(ans.DelCountR, a.DelCountR)
+
+	for key, val := range b.InsCountF {
+		ans.InsCountF[key] += val
+	}
+	for key, val := range b.InsCountR {
+		ans.InsCountR[key] += val
+	}
+	for key, val := range b.DelCountF {
+		ans.DelCountF[key] += val
+	}
+	for key, val := range b.DelCountR {
+		ans.DelCountR[key] += val
+	}
+	return ans
 }
 
 func pileup(reads []sam.Sam, header sam.Header) []sam.Pile {
@@ -710,7 +838,10 @@ func filterInputBed(bedFile string, excludeBeds []string, maxOverlaps int, minTo
 					if watsonDepth+crickDepth < minTotalDepth {
 						continue
 					}
-					if watsonDepth < minStrandedDepth || crickDepth < minStrandedDepth {
+					if minStrandedDepth == 0 && (watsonDepth < minStrandedDepth && crickDepth < minStrandedDepth) {
+						continue
+					}
+					if minStrandedDepth > 0 && (watsonDepth < minStrandedDepth || crickDepth < minStrandedDepth) {
 						continue
 					}
 					if len(excludeBeds) > 0 && len(interval.Query(tree, overlaps[i], "di")) > 0 { // query entirely contained within excluded region
