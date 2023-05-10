@@ -21,6 +21,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"path"
 	"runtime"
 	"runtime/pprof"
 	"sort"
@@ -518,7 +519,7 @@ func resetEnclosingReads(s []*sam.Sam, len int) []*sam.Sam {
 func generateVcfHeader(samples string, referenceFile string) vcf.Header {
 	var header vcf.Header
 	header.Text = append(header.Text, "##fileformat=VCFv4.2")
-	header.Text = append(header.Text, fmt.Sprintf("##reference=%s", referenceFile))
+	header.Text = append(header.Text, fmt.Sprintf("##reference=%s", path.Clean(referenceFile)))
 	header.Text = append(header.Text, strings.TrimSuffix(fai.IndexToVcfHeader(fai.ReadIndex(referenceFile+".fai")), "\n"))
 	header.Text = append(header.Text, "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">")
 	header.Text = append(header.Text, "##FORMAT=<ID=DP,Number=1,Type=Integer,Description=\"Total Read Depth\">")
