@@ -397,6 +397,12 @@ func callFromPilePair(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 			}
 			return ans, false
 		}
+		if strings.Contains(watsonInsSeq, "N") {
+			if debugOutChan != nil {
+				debugOutChan <- fmt.Sprintf("insertion seq contains Ns")
+			}
+			return ans, false
+		}
 		ans = insToVcf(wPile, cPile, chr, watsonInsSeq, faSeeker, b.Name)
 
 	case deletion:
