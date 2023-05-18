@@ -54,7 +54,6 @@ func annotateReadFamilies(input, output string, tolerance int, strict bool, bed 
 	if header.Metadata.SortOrder[0] != sam.Coordinate {
 		log.Fatal("ERROR: Input file must be coordinate sorted.")
 	}
-
 	reads = families.GoAnnotate(reads, tolerance, !strict)
 
 	out := fileio.EasyCreate(output)
@@ -73,12 +72,11 @@ func annotateReadFamilies(input, output string, tolerance int, strict bool, bed 
 	var bedToWrite []*minimalBed
 
 	for r := range reads {
-		if r.RName == "" || r.MapQ < minMapQ {
+		if r.RName == "" {
 			continue
 		}
 		sam.WriteToBamFileHandle(bw, r, 0)
-
-		if bed == "" {
+		if bed == "" || r.MapQ < minMapQ {
 			continue
 		}
 		readCount++
