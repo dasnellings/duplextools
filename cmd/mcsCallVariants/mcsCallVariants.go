@@ -63,6 +63,7 @@ func main() {
 	strandedDepth := flag.Int("s", 4, "Minimum depth of independent watson and crick strands for variant consideration. When set to 0, caller runs in unstranded mode merging read counts from watson and crick strands.")
 	endPad := flag.Int("ignoreEnds", 3, "Ignore bases within # of end of a read.")
 	minMapQ := flag.Int("minMapQ", 20, "Minimum mapping quality.")
+	countOverlappingPairs := flag.Bool("countOverlappingPairs", false, "Count both reads in overlapping regions of read pairs. By only 1 base is contributed in overlapping regions of read pairs.")
 	allowSuppAln := flag.Bool("allowSupplementaryAlignments", false, "Allow variants using reads that have supplementary alignments annotated.")
 	minAf := flag.Float64("minAF", 0.9, "Minimum fraction of reads with alternate allele **Within a read family and within strand** to be considered a variant.")
 	minBaseQuality := flag.Int("minBaseQuality", 30, "Minimum base quality to be considered for calling. Bases below threshold will be ignored.")
@@ -102,7 +103,7 @@ func main() {
 		log.Fatal("ERROR: -s * 2 should not be larger than -a")
 	}
 
-	mcsCallVariants(*input, *output, *ref, *bedFile, excludeBeds, uint8(*minMapQ), *totalDepth, *strandedDepth, *allowSuppAln, *minAf, *minBaseQuality, *baseQualPenalty, *endPad, *maxOverlappingFamilies, *debugLevel, *threads, *debugOut)
+	mcsCallVariants(*input, *output, *ref, *bedFile, excludeBeds, uint8(*minMapQ), *totalDepth, *strandedDepth, *allowSuppAln, *minAf, *minBaseQuality, *baseQualPenalty, *endPad, *maxOverlappingFamilies, *countOverlappingPairs, *debugLevel, *threads, *debugOut)
 
 	if *memprofile != "" {
 		f, err := os.Create(*memprofile)
@@ -117,12 +118,14 @@ func main() {
 	}
 }
 
-func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, minMapQ uint8, minTotalDepth, minStrandedDepth int, allowSuppAln bool, minAf float64, minBaseQuality int, baseQualPenalty float64, endPad int, maxOverlappingFamilies int, debugLevel int, threads int, debugOut string) {
+func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, minMapQ uint8, minTotalDepth, minStrandedDepth int, allowSuppAln bool, minAf float64, minBaseQuality int, baseQualPenalty float64, endPad int, maxOverlappingFamilies int, countOverlappingPairs bool, debugLevel int, threads int, debugOut string) {
 	// progress tracking
 	startTime := time.Now().UnixMilli()
 
 	var excludedRegions map[string]*interval.IntervalNode
 	bedFile, excludedRegions = filterInputBed(bedFile, excludeBeds, maxOverlappingFamilies, minTotalDepth, minStrandedDepth)
+	calledSitesBed := fileio.EasyCreate(strings.TrimSuffix(bedFile, ".bed") + ".calledSites.bed")
+	defer cleanup(calledSitesBed)
 	vcfOut := fileio.EasyCreate(output)
 	vcf.NewWriteHeader(vcfOut, makeVcfHeader(input, ref))
 	bedChan := bed.GoReadToChan(bedFile)
@@ -130,8 +133,8 @@ func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, m
 	var debugOutChan chan string
 
 	if debugOut != "" {
-		debugFile, _ = os.Create(debugOut)
-		defer debugFile.Close()
+		debugFile = fileio.EasyCreate(debugOut)
+		defer cleanup(debugFile)
 		debugOutChan = make(chan string)
 	}
 
@@ -140,19 +143,28 @@ func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, m
 	// overhead for multithreading
 	wg := new(sync.WaitGroup)
 	outputChan := make(chan []vcf.Vcf, 100)
+	calledSitesBedChan := make(chan bed.Bed, 1000)
 	for i := 0; i < threads; i++ {
 		wg.Add(1)
-		go spawnThread(bedChan, outputChan, input, ref, minMapQ, minAf, minBaseQuality, baseQualPenalty, endPad, minTotalDepth, minStrandedDepth, allowSuppAln, wg, debugOutChan)
+		go spawnThread(bedChan, outputChan, calledSitesBedChan, input, ref, minMapQ, minAf, minBaseQuality, baseQualPenalty, endPad, minTotalDepth, minStrandedDepth, allowSuppAln, countOverlappingPairs, wg, debugOutChan)
 	}
 
 	// spawn a goroutine to wait until threads are done, then close the output
 	go func(*sync.WaitGroup) {
 		wg.Wait()
 		close(outputChan)
+		close(calledSitesBedChan)
 		if debugOutChan != nil {
 			close(debugOutChan)
 		}
 	}(wg)
+
+	// spawn a gorountine to write calledSitesBed
+	go func() {
+		for b := range calledSitesBedChan {
+			bed.WriteBed(calledSitesBed, b)
+		}
+	}()
 
 	if debugFile != nil {
 		go func() {
@@ -168,7 +180,7 @@ func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, m
 	currTime := startTime
 	for v := range outputChan {
 		familiesProcessed++
-		if debugLevel > 0 && familiesProcessed%1000 == 0 {
+		if debugLevel > -1 && familiesProcessed%1000 == 0 {
 			currTime = time.Now().UnixMilli()
 			log.Printf("Processed 1000 Read Families in:\t%dsec\t%s:%d", (currTime-lastCheckpointTime)/1000, lastVar.Chr, lastVar.Pos)
 			lastCheckpointTime = currTime
@@ -191,10 +203,29 @@ func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, m
 	exception.PanicOnErr(err)
 }
 
-func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker *fasta.Seeker, bai sam.Bai, minMapQ uint8, minAf float64, minBaseQuality int, baseQualPenalty float64, endPad, minTotalDepth, minStrandedDepth int, allowSuppAln bool, recycledReads []sam.Sam, debugOutChan chan<- string) ([]vcf.Vcf, []sam.Sam) {
+func spawnThread(inputChan <-chan bed.Bed, outputChan chan<- []vcf.Vcf, calledSitesBedChan chan<- bed.Bed, inputBam, ref string, minMapQ uint8, minAf float64, minBaseQuality int, baseQualPenalty float64, endPad, minTotalDepth, minStrandedDepth int, allowSuppAln, countOverlappingPairs bool, wg *sync.WaitGroup, debugOutChan chan<- string) {
+	bamReader, bamHeader := sam.OpenBam(inputBam)
+	bai := sam.ReadBai(inputBam + ".bai")
+	faSeeker := fasta.NewSeeker(ref, "")
+	var err error
+
+	var familyVariants []vcf.Vcf
+	var recycledReads []sam.Sam
+	for b := range inputChan {
+		familyVariants, recycledReads = callFamily(b, bamReader, bamHeader, faSeeker, bai, minMapQ, minAf, minBaseQuality, baseQualPenalty, endPad, minTotalDepth, minStrandedDepth, allowSuppAln, countOverlappingPairs, recycledReads, calledSitesBedChan, debugOutChan)
+		outputChan <- familyVariants
+	}
+
+	err = bamReader.Close()
+	exception.PanicOnErr(err)
+	err = faSeeker.Close()
+	exception.PanicOnErr(err)
+	wg.Done()
+}
+
+func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker *fasta.Seeker, bai sam.Bai, minMapQ uint8, minAf float64, minBaseQuality int, baseQualPenalty float64, endPad, minTotalDepth, minStrandedDepth int, allowSuppAln, countOverlappingPairs bool, recycledReads []sam.Sam, calledSitesBedChan chan<- bed.Bed, debugOutChan chan<- string) ([]vcf.Vcf, []sam.Sam) {
 	var famId string
 	var strand byte
-
 	//expectedWatsonDepth, _ := strconv.Atoi(b.Annotation[0])
 	//expectedCrickDepth, _ := strconv.Atoi(b.Annotation[1])
 
@@ -237,8 +268,8 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker
 		return crickReads[i].Pos < crickReads[j].Pos
 	})
 
-	watsonPiles := pileup(watsonReads, header)
-	crickPiles := pileup(crickReads, header)
+	watsonPiles := pileup(watsonReads, header, countOverlappingPairs)
+	crickPiles := pileup(crickReads, header, countOverlappingPairs)
 
 	//if debugLevel > 1 && (len(watsonReads) != expectedWatsonDepth || len(crickReads) != expectedCrickDepth) {
 	//	log.Printf("WARNING: mismatch in expected (%d/%d) and actual (%d/%d) number of reads, may be supplementary alignments were removed at\n%s\n", expectedWatsonDepth, expectedCrickDepth, len(watsonReads), len(crickReads), b)
@@ -246,14 +277,15 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker
 
 	// remove piles that fall outside the consensus start/end of the read families
 	watsonPiles, crickPiles = removePositionalOutliers(watsonPiles, crickPiles, watsonReads, crickReads, endPad, b.Name)
-	return pilesToVcfs(watsonPiles, crickPiles, minAf, baseQualPenalty, minStrandedDepth, minTotalDepth, header, faSeeker, b, debugOutChan), reads
+	return pilesToVcfs(watsonPiles, crickPiles, minAf, baseQualPenalty, minStrandedDepth, minTotalDepth, header, faSeeker, b, calledSitesBedChan, debugOutChan), reads
 }
 
-func pilesToVcfs(watsonPiles, crickPiles []sam.Pile, minAf, baseQualPenalty float64, minStrandedDepth, minTotalDepth int, header sam.Header, faSeeker *fasta.Seeker, b bed.Bed, debugOutChan chan<- string) []vcf.Vcf {
+func pilesToVcfs(watsonPiles, crickPiles []sam.Pile, minAf, baseQualPenalty float64, minStrandedDepth, minTotalDepth int, header sam.Header, faSeeker *fasta.Seeker, b bed.Bed, calledSitesBedChan chan<- bed.Bed, debugOutChan chan<- string) []vcf.Vcf {
 	var variants []vcf.Vcf
 	var v vcf.Vcf
 	var keeper bool
 	var watsonPileIdx, crickPileIdx int
+	calledSites := make([]uint32, 0, b.ChromEnd-b.ChromStart)
 
 	for { // pos matching between slices of watson and crick piles
 		if watsonPileIdx == len(watsonPiles) || crickPileIdx == len(crickPiles) {
@@ -268,6 +300,7 @@ func pilesToVcfs(watsonPiles, crickPiles []sam.Pile, minAf, baseQualPenalty floa
 			continue
 		}
 		v, keeper = callFromPilePair(watsonPiles[watsonPileIdx], crickPiles[crickPileIdx], minAf, baseQualPenalty, minStrandedDepth, minTotalDepth, header, faSeeker, b, debugOutChan)
+		calledSites = append(calledSites, watsonPiles[watsonPileIdx].Pos)
 		if keeper {
 			variants = append(variants, v)
 		}
@@ -278,6 +311,7 @@ func pilesToVcfs(watsonPiles, crickPiles []sam.Pile, minAf, baseQualPenalty floa
 
 	// do not include single-stranded data if not running in unstranded mode
 	if !(minStrandedDepth == 0 && (watsonPileIdx < len(watsonPiles) || crickPileIdx < len(crickPiles))) {
+		sendCalledSites(b, calledSites, calledSitesBedChan)
 		return variants
 	}
 
@@ -287,6 +321,7 @@ func pilesToVcfs(watsonPiles, crickPiles []sam.Pile, minAf, baseQualPenalty floa
 		emptyPile.Pos = watsonPiles[watsonPileIdx].Pos
 		emptyPile.RefIdx = watsonPiles[watsonPileIdx].RefIdx
 		v, keeper = callFromPilePair(watsonPiles[watsonPileIdx], emptyPile, minAf, baseQualPenalty, minStrandedDepth, minTotalDepth, header, faSeeker, b, debugOutChan)
+		calledSites = append(calledSites, watsonPiles[watsonPileIdx].Pos)
 		if keeper {
 			variants = append(variants, v)
 		}
@@ -296,11 +331,13 @@ func pilesToVcfs(watsonPiles, crickPiles []sam.Pile, minAf, baseQualPenalty floa
 		emptyPile.Pos = crickPiles[crickPileIdx].Pos
 		emptyPile.RefIdx = crickPiles[crickPileIdx].RefIdx
 		v, keeper = callFromPilePair(emptyPile, crickPiles[crickPileIdx], minAf, baseQualPenalty, minStrandedDepth, minTotalDepth, header, faSeeker, b, debugOutChan)
+		calledSites = append(calledSites, crickPiles[crickPileIdx].Pos)
 		if keeper {
 			variants = append(variants, v)
 		}
 		crickPileIdx++
 	}
+	sendCalledSites(b, calledSites, calledSitesBedChan)
 	return variants
 }
 
@@ -516,7 +553,7 @@ func sumPiles(a, b sam.Pile) sam.Pile {
 	return ans
 }
 
-func pileup(reads []sam.Sam, header sam.Header) []sam.Pile {
+func pileup(reads []sam.Sam, header sam.Header, countOverlappingPairs bool) []sam.Pile {
 	if len(reads) == 0 {
 		return nil
 	}
@@ -531,9 +568,80 @@ func pileup(reads []sam.Sam, header sam.Header) []sam.Pile {
 	ans := make([]sam.Pile, 0, 100)
 	pileChan := sam.GoPileup(samChan, header, false, nil, nil)
 	for p := range pileChan {
+		if !countOverlappingPairs {
+			removeBasesFromOverlappingReadPairs(&p)
+		}
 		ans = append(ans, p)
 	}
 	return ans
+}
+
+func sendCalledSites(orig bed.Bed, sites []uint32, out chan<- bed.Bed) {
+	if len(sites) == 0 {
+		return
+	}
+	slices.Sort(sites)
+	var curr bed.Bed = orig
+	var prevPos uint32
+	for i := range sites {
+		if prevPos == 0 { // first entry, start bed
+			curr.ChromStart = int(sites[i]) - 1 // bed is 0-base sam is 1-base
+			prevPos = sites[i]
+			continue
+		}
+		if sites[i] > prevPos+1 { // discontiguous, output curr
+			curr.ChromEnd = int(prevPos)
+			out <- curr
+			curr.ChromStart = int(sites[i]) - 1
+			prevPos = sites[i]
+			continue
+		}
+		prevPos = sites[i]
+	}
+	curr.ChromEnd = int(prevPos)
+	out <- curr
+}
+
+func removeBasesFromOverlappingReadPairs(p *sam.Pile) {
+	for i := range p.CountF {
+		if p.CountF[i] > p.CountR[i] {
+			p.CountR[i] = 0
+		} else {
+			p.CountF[i] = 0
+		}
+	}
+
+	for key := range p.DelCountF {
+		if p.DelCountF[key] > p.DelCountR[key] {
+			p.DelCountR[key] = 0
+		} else {
+			p.DelCountF[key] = 0
+		}
+	}
+
+	for key := range p.DelCountR {
+		if p.DelCountF[key] > p.DelCountR[key] {
+			p.DelCountR[key] = 0
+		} else {
+			p.DelCountF[key] = 0
+		}
+	}
+
+	for key := range p.InsCountF {
+		if p.InsCountF[key] > p.InsCountR[key] {
+			p.InsCountR[key] = 0
+		} else {
+			p.InsCountF[key] = 0
+		}
+	}
+
+	for key := range p.InsCountR {
+		if p.InsCountF[key] > p.InsCountR[key] {
+			p.InsCountR[key] = 0
+		} else {
+			p.InsCountF[key] = 0
+		}
+	}
 }
 
 type variantType byte
@@ -869,26 +977,6 @@ func filterInputBed(bedFile string, excludeBeds []string, maxOverlaps int, minTo
 	return outfile, tree
 }
 
-func spawnThread(inputChan <-chan bed.Bed, outputChan chan<- []vcf.Vcf, inputBam string, ref string, minMapQ uint8, minAf float64, minBaseQuality int, baseQualPenalty float64, endPad, minTotalDepth, minStrandedDepth int, allowSuppAln bool, wg *sync.WaitGroup, debugOutChan chan<- string) {
-	bamReader, bamHeader := sam.OpenBam(inputBam)
-	bai := sam.ReadBai(inputBam + ".bai")
-	faSeeker := fasta.NewSeeker(ref, "")
-	var err error
-
-	var familyVariants []vcf.Vcf
-	var recycledReads []sam.Sam
-	for b := range inputChan {
-		familyVariants, recycledReads = callFamily(b, bamReader, bamHeader, faSeeker, bai, minMapQ, minAf, minBaseQuality, baseQualPenalty, endPad, minTotalDepth, minStrandedDepth, allowSuppAln, recycledReads, debugOutChan)
-		outputChan <- familyVariants
-	}
-
-	err = bamReader.Close()
-	exception.PanicOnErr(err)
-	err = faSeeker.Close()
-	exception.PanicOnErr(err)
-	wg.Done()
-}
-
 func clipReadEnds(s *sam.Sam, clipLen int) {
 	if s.Cigar == nil || len(s.Cigar) == 0 || s.Cigar[0].Op == '*' {
 		return
@@ -1046,4 +1134,9 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func cleanup(f io.Closer) {
+	err := f.Close()
+	exception.PanicOnErr(err)
 }
