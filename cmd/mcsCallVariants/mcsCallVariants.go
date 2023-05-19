@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/dasnellings/MCS_MS/barcode"
 	"github.com/dasnellings/MCS_MS/fai"
+	"github.com/pkg/profile"
 	"github.com/vertgenlab/gonomics/bed"
 	"github.com/vertgenlab/gonomics/cigar"
 	"github.com/vertgenlab/gonomics/dna"
@@ -18,9 +19,6 @@ import (
 	"golang.org/x/exp/slices"
 	"io"
 	"log"
-	"os"
-	"runtime"
-	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -52,8 +50,8 @@ func (i *inputFiles) Set(value string) error {
 
 func main() {
 	var excludeBeds inputFiles
-	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to `file`")
-	memprofile := flag.String("memprofile", "", "write memory profile to `file`")
+	cpuprofile := flag.Bool("cpuprofile", false, "write cpu profile")
+	memprofile := flag.Bool("memprofile", false, "write memory profile")
 	input := flag.String("i", "", "Input bam file. Must be indexed.")
 	output := flag.String("o", "stdout", "Output VCF file.")
 	bedFile := flag.String("b", "", "Input bed file with coordinates of read families, read family ID, and read counts for watson and crick strands. Generated with -bed option in annotateReadFamilies.")
@@ -74,16 +72,15 @@ func main() {
 	debugOut := flag.String("debugLog", "", "Print debug logs to file. File may be large. Must be run with threads == 1 for coherent output. ")
 	flag.Parse()
 
-	if *cpuprofile != "" {
-		f, err := os.Create(*cpuprofile)
-		if err != nil {
-			log.Fatal("could not create CPU profile: ", err)
-		}
-		defer f.Close() // error handling omitted for example
-		if err := pprof.StartCPUProfile(f); err != nil {
-			log.Fatal("could not start CPU profile: ", err)
-		}
-		defer pprof.StopCPUProfile()
+	if *memprofile && *cpuprofile {
+		usage()
+		log.Fatal("ERROR: -memprofile and -cpuprofile are mutually exclusive.")
+	}
+	if *memprofile {
+		defer profile.Start(profile.MemProfile).Stop()
+	}
+	if *cpuprofile {
+		defer profile.Start(profile.CPUProfile).Stop()
 	}
 
 	if len(excludeBeds) == 0 {
@@ -104,18 +101,6 @@ func main() {
 	}
 
 	mcsCallVariants(*input, *output, *ref, *bedFile, excludeBeds, uint8(*minMapQ), *totalDepth, *strandedDepth, *allowSuppAln, *minAf, *minBaseQuality, *baseQualPenalty, *endPad, *maxOverlappingFamilies, *countOverlappingPairs, *debugLevel, *threads, *debugOut)
-
-	if *memprofile != "" {
-		f, err := os.Create(*memprofile)
-		if err != nil {
-			log.Fatal("could not create memory profile: ", err)
-		}
-		defer f.Close() // error handling omitted for example
-		runtime.GC()    // get up-to-date statistics
-		if err := pprof.WriteHeapProfile(f); err != nil {
-			log.Fatal("could not write memory profile: ", err)
-		}
-	}
 }
 
 func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, minMapQ uint8, minTotalDepth, minStrandedDepth int, allowSuppAln bool, minAf float64, minBaseQuality int, baseQualPenalty float64, endPad int, maxOverlappingFamilies int, countOverlappingPairs bool, debugLevel int, threads int, debugOut string) {
@@ -208,11 +193,12 @@ func spawnThread(inputChan <-chan bed.Bed, outputChan chan<- []vcf.Vcf, calledSi
 	bai := sam.ReadBai(inputBam + ".bai")
 	faSeeker := fasta.NewSeeker(ref, "")
 	var err error
+	var calledSitesBuffer []uint32
 
 	var familyVariants []vcf.Vcf
 	var recycledReads []sam.Sam
 	for b := range inputChan {
-		familyVariants, recycledReads = callFamily(b, bamReader, bamHeader, faSeeker, bai, minMapQ, minAf, minBaseQuality, baseQualPenalty, endPad, minTotalDepth, minStrandedDepth, allowSuppAln, countOverlappingPairs, recycledReads, calledSitesBedChan, debugOutChan)
+		familyVariants, recycledReads, calledSitesBuffer = callFamily(b, bamReader, bamHeader, faSeeker, bai, minMapQ, minAf, minBaseQuality, baseQualPenalty, endPad, minTotalDepth, minStrandedDepth, allowSuppAln, countOverlappingPairs, recycledReads, calledSitesBuffer, calledSitesBedChan, debugOutChan)
 		outputChan <- familyVariants
 	}
 
@@ -223,7 +209,7 @@ func spawnThread(inputChan <-chan bed.Bed, outputChan chan<- []vcf.Vcf, calledSi
 	wg.Done()
 }
 
-func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker *fasta.Seeker, bai sam.Bai, minMapQ uint8, minAf float64, minBaseQuality int, baseQualPenalty float64, endPad, minTotalDepth, minStrandedDepth int, allowSuppAln, countOverlappingPairs bool, recycledReads []sam.Sam, calledSitesBedChan chan<- bed.Bed, debugOutChan chan<- string) ([]vcf.Vcf, []sam.Sam) {
+func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker *fasta.Seeker, bai sam.Bai, minMapQ uint8, minAf float64, minBaseQuality int, baseQualPenalty float64, endPad, minTotalDepth, minStrandedDepth int, allowSuppAln, countOverlappingPairs bool, recycledReads []sam.Sam, calledSitesBuffer []uint32, calledSitesBedChan chan<- bed.Bed, debugOutChan chan<- string) ([]vcf.Vcf, []sam.Sam, []uint32) {
 	var famId string
 	var strand byte
 	//expectedWatsonDepth, _ := strconv.Atoi(b.Annotation[0])
@@ -258,7 +244,7 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker
 	}
 
 	if (len(watsonReads) == 0 && len(crickReads) == 0) || (len(watsonReads) < minStrandedDepth || len(crickReads) < minStrandedDepth) {
-		return nil, reads
+		return nil, reads, calledSitesBuffer
 	}
 
 	sort.Slice(watsonReads, func(i, j int) bool {
@@ -276,16 +262,21 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker
 	//}
 
 	// remove piles that fall outside the consensus start/end of the read families
-	watsonPiles, crickPiles = removePositionalOutliers(watsonPiles, crickPiles, watsonReads, crickReads, endPad, b.Name)
-	return pilesToVcfs(watsonPiles, crickPiles, minAf, baseQualPenalty, minStrandedDepth, minTotalDepth, header, faSeeker, b, calledSitesBedChan, debugOutChan), reads
+	watsonPiles, crickPiles = removePositionalOutliers(watsonPiles, crickPiles, watsonReads, crickReads, endPad, b)
+	var ans []vcf.Vcf
+	ans, calledSitesBuffer = pilesToVcfs(watsonPiles, crickPiles, minAf, baseQualPenalty, minStrandedDepth, minTotalDepth, header, faSeeker, b, calledSitesBuffer, calledSitesBedChan, debugOutChan)
+	return ans, reads, calledSitesBuffer
 }
 
-func pilesToVcfs(watsonPiles, crickPiles []sam.Pile, minAf, baseQualPenalty float64, minStrandedDepth, minTotalDepth int, header sam.Header, faSeeker *fasta.Seeker, b bed.Bed, calledSitesBedChan chan<- bed.Bed, debugOutChan chan<- string) []vcf.Vcf {
+func pilesToVcfs(watsonPiles, crickPiles []sam.Pile, minAf, baseQualPenalty float64, minStrandedDepth, minTotalDepth int, header sam.Header, faSeeker *fasta.Seeker, b bed.Bed, calledSites []uint32, calledSitesBedChan chan<- bed.Bed, debugOutChan chan<- string) ([]vcf.Vcf, []uint32) {
 	var variants []vcf.Vcf
 	var v vcf.Vcf
 	var keeper bool
 	var watsonPileIdx, crickPileIdx int
-	calledSites := make([]uint32, 0, b.ChromEnd-b.ChromStart)
+	calledSites = calledSites[:0] // empty slice
+	if cap(calledSites) < b.ChromEnd-b.ChromStart {
+		calledSites = make([]uint32, 0, b.ChromEnd-b.ChromStart)
+	}
 
 	for { // pos matching between slices of watson and crick piles
 		if watsonPileIdx == len(watsonPiles) || crickPileIdx == len(crickPiles) {
@@ -312,7 +303,7 @@ func pilesToVcfs(watsonPiles, crickPiles []sam.Pile, minAf, baseQualPenalty floa
 	// do not include single-stranded data if not running in unstranded mode
 	if !(minStrandedDepth == 0 && (watsonPileIdx < len(watsonPiles) || crickPileIdx < len(crickPiles))) {
 		sendCalledSites(b, calledSites, calledSitesBedChan)
-		return variants
+		return variants, calledSites
 	}
 
 	// unstranded mode only below
@@ -338,7 +329,7 @@ func pilesToVcfs(watsonPiles, crickPiles []sam.Pile, minAf, baseQualPenalty floa
 		crickPileIdx++
 	}
 	sendCalledSites(b, calledSites, calledSitesBedChan)
-	return variants
+	return variants, calledSites
 }
 
 func callFromPilePair(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, minStrandedDepth, minTotalDepth int, header sam.Header, faSeeker *fasta.Seeker, b bed.Bed, debugOutChan chan<- string) (vcf.Vcf, bool) {
@@ -812,7 +803,7 @@ func makeVcfHeader(infile string, referenceFile string) vcf.Header {
 	return header
 }
 
-func removePositionalOutliers(watsonPiles, crickPiles []sam.Pile, watsonReads, crickReads []sam.Sam, endPad int, famId string) (filteredWatsonPiles, filteredCrickPiles []sam.Pile) {
+func removePositionalOutliers(watsonPiles, crickPiles []sam.Pile, watsonReads, crickReads []sam.Sam, endPad int, b bed.Bed) (filteredWatsonPiles, filteredCrickPiles []sam.Pile) {
 	filteredWatsonPiles = make([]sam.Pile, 0, len(watsonPiles))
 	filteredCrickPiles = make([]sam.Pile, 0, len(crickPiles))
 
