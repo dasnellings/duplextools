@@ -368,6 +368,7 @@ func callFromPilePair(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 		crickAltAlleleCount = crickInsAlleleCount
 		if debugOutChan != nil {
 			debugOutChan <- fmt.Sprintf("triggered insertion bias")
+			debugOutChan <- fmt.Sprintf("WatsonAC:%d, WatsonDP:%d, CrickAC:%d, CrickDP:%d", watsonAltAlleleCount, watsonDepth, crickAltAlleleCount, crickDepth)
 		}
 	}
 
@@ -1075,7 +1076,7 @@ func pileDepth(p sam.Pile, baseQualPenalty float64) int {
 	var maskCount int
 	for i := range p.CountF {
 		if i == int(dna.N) {
-			maskCount++
+			maskCount += p.CountF[i] + p.CountR[i]
 			continue
 		}
 		depth += p.CountF[i] + p.CountR[i]
