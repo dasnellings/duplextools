@@ -5,7 +5,7 @@ go 1.20
 require (
 	github.com/guptarohit/asciigraph v0.5.5
 	github.com/pkg/profile v1.7.0
-	github.com/vertgenlab/gonomics v0.0.0-20230524152354-27c52b7f1785
+	github.com/vertgenlab/gonomics v0.0.0-20230525170618-5a1156ca9223
 	golang.org/x/exp v0.0.0-20230418202329-0354be287a23
 )
 
