@@ -55,7 +55,7 @@ func main() {
 	input := flag.String("i", "", "Input bam file. Must be indexed.")
 	output := flag.String("o", "stdout", "Output VCF file.")
 	bedFile := flag.String("b", "", "Input bed file with coordinates of read families, read family ID, and read counts for watson and crick strands. Generated with -bed option in annotateReadFamilies.")
-	flag.Var(&excludeBeds, "e", "Bed file(s) with regions to exclude from analysis. May be declared more than once with additional -e flags. Strongly recommended to mask regions with poor mappability.")
+	flag.Var(&excludeBeds, "e", "Bed file(s) with regions to exclude from analysis. May be declared more than once with additional -e flags. Strongly recommended to mask regions with poor mappability. Note that any family OVERLAPPING an excluded region will be removed from analysis.")
 	ref := flag.String("r", "", "Fasta file with reference genome used to align input bam. Must be indexed.")
 	totalDepth := flag.Int("a", 8, "Minimum total depth of read family for variant consideration.")
 	strandedDepth := flag.Int("s", 4, "Minimum depth of independent watson and crick strands for variant consideration. When set to 0, caller runs in unstranded mode merging read counts from watson and crick strands.")
@@ -108,8 +108,8 @@ func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, m
 	// progress tracking
 	startTime := time.Now().UnixMilli()
 
-	var excludedRegions map[string]*interval.IntervalNode
-	bedFile, excludedRegions = filterInputBed(bedFile, excludeBeds, maxOverlappingFamilies, minTotalDepth, minStrandedDepth)
+	//var excludedRegions map[string]*interval.IntervalNode
+	bedFile, _ = filterInputBed(bedFile, excludeBeds, maxOverlappingFamilies, minTotalDepth, minStrandedDepth)
 	calledSitesBed := fileio.EasyCreate(strings.TrimSuffix(bedFile, ".bed") + ".calledSites.bed")
 	defer cleanup(calledSitesBed)
 	vcfOut := fileio.EasyCreate(output)
@@ -171,14 +171,16 @@ func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, m
 			log.Printf("Processed 1000 Read Families in:\t%dsec\t%s:%d", (currTime-lastCheckpointTime)/1000, lastVar.Chr, lastVar.Pos)
 			lastCheckpointTime = currTime
 		}
+
 		if len(v) > 0 {
 			for i := range v {
-				if len(interval.Query(excludedRegions, v[i], "any")) > 0 {
-					continue
-				}
+				//		if len(interval.Query(excludedRegions, v[i], "any")) > 0 {
+				//			continue
+				//		}
 				vcf.WriteVcf(vcfOut, v[i])
 			}
 			lastVar = v[len(v)-1]
+			//}
 		}
 	}
 
@@ -1113,7 +1115,7 @@ func filterInputBed(bedFile string, excludeBeds []string, maxOverlaps int, minTo
 					if minStrandedDepth > 0 && (watsonDepth < minStrandedDepth || crickDepth < minStrandedDepth) {
 						continue
 					}
-					if len(excludeBeds) > 0 && len(interval.Query(tree, overlaps[i], "di")) > 0 { // query entirely contained within excluded region
+					if len(excludeBeds) > 0 && len(interval.Query(tree, overlaps[i], "any")) > 0 { // REMOVE IF ANY OVERLAP WITH EXCLUDED REGIONS switch to "di" for // query entirely contained within excluded region
 						continue
 					}
 					bed.WriteBed(out, overlaps[i])
