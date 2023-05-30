@@ -25,6 +25,10 @@ func (idx Index) String() string {
 	return answer.String()
 }
 
+func (idx Index) Size(chr string) int {
+	return idx.chroms[idx.nameMap[chr]].len
+}
+
 // chrOffset has offset information about each reference. Equivalent to one line of a fai file.
 type chrOffset struct {
 	name         string // Name of this reference sequence

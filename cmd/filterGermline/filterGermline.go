@@ -29,6 +29,7 @@ func main() {
 	//ref := flag.String("r", "", "Reference FASTA file. Must be indexed (.fai).")
 	genomicVcf := flag.String("g", "", "VCF file with germline variants from bulk sequencing.")
 	genomicBam := flag.String("b", "", "BAM file from bulk tissue. Must be indexed (.bai).")
+	snpVcf := flag.String("e", "", "VCF file with sites with known SNPs to exclude from analysis.")
 	minCoverage := flag.Int("minCoverage", 10, "Minimum coverage in bulk bam for consideration in output.")
 	maxReadFrac := flag.Float64("maxReadFrac", 0.1, "Maximum fraction of reads (minimum 1) in bulk sample for variant to be considered for output.")
 	maxReads := flag.Int("maxReads", 100000, "Maximum number of reads with alternate allele present in bulk sample to escape filtering (e.g. set to 1 to exclude all variants with >1 read with alternate allele in bulk sample")
@@ -41,10 +42,10 @@ func main() {
 		log.Fatalln("ERROR: must have inputs for -i, -b, and -g")
 	}
 
-	handleInputs(*input, *output, *genomicBam, *genomicVcf, *minCoverage, *maxReadFrac, *maxReads, *minBaseQuality)
+	handleInputs(*input, *output, *genomicBam, *genomicVcf, *snpVcf, *minCoverage, *maxReadFrac, *maxReads, *minBaseQuality)
 }
 
-func handleInputs(input, output, genomicBam, genomicVcf string, minCoverage int, maxReadFrac float64, maxReads int, minBaseQuality int) {
+func handleInputs(input, output, genomicBam, genomicVcf, snpVcf string, minCoverage int, maxReadFrac float64, maxReads int, minBaseQuality int) {
 	var err error
 	out := fileio.EasyCreate(output)
 	inChan, header := vcf.GoReadToChan(input)
@@ -60,6 +61,15 @@ func handleInputs(input, output, genomicBam, genomicVcf string, minCoverage int,
 		padding = numbers.Max(len(v.Ref), len(v.Alt[0]))
 		excludeIntervals = append(excludeIntervals, bed.Bed{Chrom: v.Chr, ChromStart: v.Pos - padding, ChromEnd: v.Pos + padding, FieldsInitialized: 3})
 	}
+
+	if snpVcf != "" {
+		snpVcfChan, _ := vcf.GoReadToChan(snpVcf)
+		for v := range snpVcfChan {
+			padding = numbers.Max(len(v.Ref), len(v.Alt[0]))
+			excludeIntervals = append(excludeIntervals, bed.Bed{Chrom: v.Chr, ChromStart: v.Pos - padding, ChromEnd: v.Pos + padding, FieldsInitialized: 3})
+		}
+	}
+
 	tree := interval.BuildTree(excludeIntervals)
 
 	filterGermline(inChan, out, gBam, gBamHeader, gBai, tree, minCoverage, maxReadFrac, maxReads, minBaseQuality)
