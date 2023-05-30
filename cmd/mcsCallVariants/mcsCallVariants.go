@@ -66,8 +66,9 @@ func main() {
 	minAf := flag.Float64("minAF", 0.9, "Minimum fraction of reads with alternate allele **Within a read family and within strand** to be considered a variant.")
 	minBaseQuality := flag.Int("minBaseQuality", 30, "Minimum base quality to be considered for calling. Bases below threshold will be ignored.")
 	baseQualPenalty := flag.Float64("baseQualPenalty", 0.5, "Penalty for positions with low quality base. Each read with a base < minBaseQuality counts towards baseQualPenalty fraction of a read for allele frequency calculations. Note that low quality bases are N-masked and so will always count AGAINST the alternate allele. (e.g. by default each read with a low quality base counts as 0.5 reads for allele frequency determination.")
-	maxOverlappingFamilies := flag.Int("maxOverlappingFamilies", 20, "Maximum number of overlapping read families for site to be considered for calling. Low number avoids regions with many misalignments (e.g. centromeres) reducing memory usage. Set to -1 for no limit. Analyzed bed will be `bedfile`.analysis.bed")
+	maxOverlappingFamilies := flag.Int("maxOverlappingFamilies", 20, "Maximum number of overlapping read families for site to be considered for calling. Low number avoids regions with many misalignments (e.g. centromeres) reducing memory usage. Set to -1 for no limit. Analyzed bed will be bedfile.analysis.bed")
 	callSingleStrand := flag.Bool("ss", false, "Include single-stranded variants in output VCF. Single-stranded calling uses the same a and s minimum values as double-stranded calling but requires perfect asymmetry between strands such that 100% of reads carry the variant on strand 1 and 0% of reads carry the variant on strand 2. Single-stranded calls will have 'SS' in the INFO field.")
+	minContigSize := flag.Int("minContigSize", 10_000_000, "Remove families mapping to contigs of length < minContigSize. The default value cuts out common decoy sequences and chrM from the human genome while keeping chr1-22,X,Y.")
 	threads := flag.Int("threads", 1, "Number of processor threads to use for calling. Output VCF will be out of order with threads > 1.")
 	debugLevel := flag.Int("verbose", 0, "Level of verbosity in log.")
 	debugOut := flag.String("debugLog", "", "Print debug logs to file. File may be large. Must be run with threads == 1 for coherent output. ")
@@ -101,15 +102,16 @@ func main() {
 		log.Fatal("ERROR: -s * 2 should not be larger than -a")
 	}
 
-	mcsCallVariants(*input, *output, *ref, *bedFile, excludeBeds, uint8(*minMapQ), *totalDepth, *strandedDepth, *allowSuppAln, *minAf, *minBaseQuality, *baseQualPenalty, *endPad, *maxOverlappingFamilies, *countOverlappingPairs, *callSingleStrand, *debugLevel, *threads, *debugOut)
+	mcsCallVariants(*input, *output, *ref, *bedFile, excludeBeds, uint8(*minMapQ), *totalDepth, *strandedDepth, *allowSuppAln, *minAf, *minBaseQuality, *minContigSize, *baseQualPenalty, *endPad, *maxOverlappingFamilies, *countOverlappingPairs, *callSingleStrand, *debugLevel, *threads, *debugOut)
 }
 
-func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, minMapQ uint8, minTotalDepth, minStrandedDepth int, allowSuppAln bool, minAf float64, minBaseQuality int, baseQualPenalty float64, endPad, maxOverlappingFamilies int, countOverlappingPairs, callSingleStrand bool, debugLevel, threads int, debugOut string) {
+func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, minMapQ uint8, minTotalDepth, minStrandedDepth int, allowSuppAln bool, minAf float64, minBaseQuality, minContigSize int, baseQualPenalty float64, endPad, maxOverlappingFamilies int, countOverlappingPairs, callSingleStrand bool, debugLevel, threads int, debugOut string) {
 	// progress tracking
 	startTime := time.Now().UnixMilli()
 
 	//var excludedRegions map[string]*interval.IntervalNode
-	bedFile, _ = filterInputBed(bedFile, excludeBeds, maxOverlappingFamilies, minTotalDepth, minStrandedDepth)
+	refIdx := fai.ReadIndex(ref + ".fai")
+	bedFile, _ = filterInputBed(bedFile, excludeBeds, maxOverlappingFamilies, minTotalDepth, minStrandedDepth, minContigSize, refIdx)
 	calledSitesBed := fileio.EasyCreate(strings.TrimSuffix(bedFile, ".bed") + ".calledSites.bed")
 	defer cleanup(calledSitesBed)
 	vcfOut := fileio.EasyCreate(output)
@@ -960,6 +962,7 @@ func makeVcfHeader(infile string, referenceFile string) vcf.Header {
 	header.Text = append(header.Text, "##INFO=<ID=DS,Number=0,Type=Flag,Description=\"Variant is double-stranded\">")
 	header.Text = append(header.Text, "##INFO=<ID=SS,Number=0,Type=Flag,Description=\"Variant is single-stranded\">")
 	header.Text = append(header.Text, "##INFO=<ID=US,Number=0,Type=Flag,Description=\"Variant is called with unstranded mode\">")
+	header.Text = append(header.Text, "##INFO=<ID=Strand,Number=1,Type=String,Description=\"Strand the mutation is on (relative to the reference)\">")
 	header.Text = append(header.Text, "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">")
 	header.Text = append(header.Text, "##FORMAT=<ID=DP,Number=1,Type=Integer,Description=\"Total Read Depth\">")
 	header.Text = append(header.Text, "##FORMAT=<ID=PS,Number=1,Type=Integer,Description=\"Reference Plus Strand Read Depth\">")
@@ -1077,7 +1080,7 @@ func sclipTerminalIns(s *sam.Sam) {
 	}
 }
 
-func filterInputBed(bedFile string, excludeBeds []string, maxOverlaps int, minTotalDepth int, minStrandedDepth int) (string, map[string]*interval.IntervalNode) {
+func filterInputBed(bedFile string, excludeBeds []string, maxOverlaps, minTotalDepth, minStrandedDepth, minContigSize int, refIdx fai.Index) (string, map[string]*interval.IntervalNode) {
 	var excludeIntervals []interval.Interval
 	var tree map[string]*interval.IntervalNode
 	for _, e := range excludeBeds {
@@ -1094,6 +1097,9 @@ func filterInputBed(bedFile string, excludeBeds []string, maxOverlaps int, minTo
 	overlaps := make([]bed.Bed, 0, 1000)
 	var watsonDepth, crickDepth int
 	for b := range beds {
+		if refIdx.Size(b.Chrom) < minContigSize {
+			continue
+		}
 		switch {
 		case len(overlaps) == 0:
 			overlaps = append(overlaps, b)
