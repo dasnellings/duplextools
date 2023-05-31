@@ -1311,7 +1311,9 @@ func watsonIsPlus(watsonReads, crickReads []sam.Sam) bool {
 	//}
 
 	//log.Println(watsonReads[0].Pos, watsonF1R2Count, watsonF2R1Count, crickF1R2Count, crickF2R1Count)
-	return watsonF1R2Count > watsonF2R1Count
+
+	// Due to the orientation of the META-CS oligos and SBS the plus strand will be F2R1 and minus strand will be F1R2
+	return watsonF1R2Count < watsonF2R1Count
 }
 
 func getOrientation(r *sam.Sam) orientation {
