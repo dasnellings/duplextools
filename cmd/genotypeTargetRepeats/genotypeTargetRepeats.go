@@ -17,6 +17,7 @@ import (
 	"github.com/vertgenlab/gonomics/sam"
 	"github.com/vertgenlab/gonomics/vcf"
 	"golang.org/x/exp/slices"
+	"gonum.org/v1/gonum/stat"
 	"io"
 	"log"
 	"math"
@@ -114,6 +115,8 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 	var err error
 	var ref *fasta.Seeker
 	var lenOut *fileio.EasyWriter
+	buf := new([2][11]float64)
+	readBuf := new([]float64)
 	targets := bed.Read(targetsFile)
 	vcfOut := fileio.EasyCreate(outputFile)
 	defer cleanup(vcfOut)
@@ -156,8 +159,8 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 	enclosingReads := make([][]*sam.Sam, len(inputFiles)) // first index is sample
 	observedLengths := make([][]int, len(inputFiles))     // first index is sample
 	var currVcf vcf.Vcf
-	alignerInput := make(chan sam.Sam, 100)
-	alignerOutput := make(chan sam.Sam, 100)
+	alignerInput := make(chan sam.Sam, 1000)
+	alignerOutput := make(chan sam.Sam, 1000)
 	for j := 0; j < alignerThreads; j++ {
 		ref = fasta.NewSeeker(refFile, "")
 		defer cleanup(ref)
@@ -173,7 +176,9 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 	gaussians := make([][]float64, 2)
 	var floatSlice []float64
 	var converged, anyConverged, passingVariant bool
+	var repeatUnit []dna.Base
 	for _, region := range targets {
+		repeatUnit, _ = parseRepeatSeq(region.Name)
 		anyConverged = false
 		for i := range inputFiles {
 			enclosingReads[i], observedLengths[i] = getLenghtDist(enclosingReads[i], targetPadding, minMapQ, minFlankOverlap, removeDups, bamIdxs[i], region, br[i], bamOut[i], alignerInput, alignerOutput)
@@ -199,10 +204,22 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 		}
 
 		if debug > 0 {
+			val, counts := sliceToCounts(mm[0].Data)
+			for i := range val {
+				fmt.Printf("%d:%d\t", int(val[i]), counts[i])
+			}
+			fmt.Println()
+			for i := range mm {
+				for k := range mm[i].Means {
+					fmt.Printf("k=%d mu=%0.2f stdev=%0.2f\tloglikelihood=%0.4g\n", k, mm[i].Means[k], mm[i].Stdev[k], mm[i].LogLikelihood)
+					testPulseFitKS(mm[i], k, len(repeatUnit), buf, readBuf, true)
+					testPulseFitHeuristic(mm[i], k, len(repeatUnit), true)
+				}
+			}
 			plot(observedLengths, minReads, mm, gaussians)
 		}
 
-		currVcf, passingVariant = callGenotypes(ref, region, minReads, enclosingReads, observedLengths, mm)
+		currVcf, passingVariant = callGenotypes(ref, region, minReads, enclosingReads, observedLengths, mm, buf, readBuf)
 		if passingVariant {
 			vcf.WriteVcf(vcfOut, currVcf)
 		}
@@ -211,7 +228,7 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 	close(alignerOutput)
 }
 
-func callGenotypes(ref *fasta.Seeker, region bed.Bed, minReads int, enclosingReads [][]*sam.Sam, observedLengths [][]int, mm []*gmm.MixtureModel) (vcf.Vcf, bool) {
+func callGenotypes(ref *fasta.Seeker, region bed.Bed, minReads int, enclosingReads [][]*sam.Sam, observedLengths [][]int, mm []*gmm.MixtureModel, buf *[2][11]float64, readBuf *[]float64) (vcf.Vcf, bool) {
 	var ans vcf.Vcf
 	repeatUnitLen, refNumRepeats := parseRepeatSeq(region.Name)
 	refRepeatLen := refNumRepeats * len(repeatUnitLen)
@@ -248,58 +265,60 @@ func callGenotypes(ref *fasta.Seeker, region bed.Bed, minReads int, enclosingRea
 	ans.Alt = append(ans.Alt, "*")
 	ans.Filter = "."
 	ans.Id = region.Name
-	ans.Format = []string{"GT", "DP", "MU", "SD", "WT", "LL"}
+	ans.Format = []string{"GT", "DP", "MU", "SD", "WT", "LL", "AD", "KS", "CG", "HS", "HG"}
 	ans.Samples = make([]vcf.Sample, len(mm))
+	var goodnessOfFit0, goodnessOfFit1, pulseHeuristic0, pulseHeuristic1 float64
+	var allele0Reads, allele1Reads, minKsLen0, minKsLen1, optimalHeuristicLen0, optimalHeuristicLen1 int
+	var readLenString0, readLenString1 string
 	for i := range ans.Samples {
-		ans.Samples[i].FormatData = make([]string, 6)
+		ans.Samples[i].FormatData = make([]string, 12)
 		ans.Samples[i].FormatData[1] = fmt.Sprintf("%d", len(observedLengths[i]))
 		if mm[i].LogLikelihood == math.MaxFloat64 {
 			ans.Samples[i].FormatData[2] = "."
 			ans.Samples[i].FormatData[3] = "."
 			ans.Samples[i].FormatData[4] = "."
 			ans.Samples[i].FormatData[5] = "."
+			ans.Samples[i].FormatData[6] = "."
+			ans.Samples[i].FormatData[7] = "."
+			ans.Samples[i].FormatData[8] = "."
+			ans.Samples[i].FormatData[9] = "."
+			ans.Samples[i].FormatData[10] = "."
+			ans.Samples[i].FormatData[11] = "."
 			continue
 		}
+		ans.Samples[i].FormatData[5] = fmt.Sprintf("%.1g", mm[i].LogLikelihood)
+
+		goodnessOfFit0, allele0Reads, minKsLen0 = testPulseFitKS(mm[i], 0, len(repeatUnitLen), buf, readBuf, false)
+		goodnessOfFit1, allele1Reads, minKsLen1 = testPulseFitKS(mm[i], 1, len(repeatUnitLen), buf, readBuf, false)
+		pulseHeuristic0, _, optimalHeuristicLen0 = testPulseFitHeuristic(mm[i], 0, len(repeatUnitLen), false)
+		pulseHeuristic1, _, optimalHeuristicLen1 = testPulseFitHeuristic(mm[i], 1, len(repeatUnitLen), false)
+		readLenString0 = getRunLengthEncoding(getReadsForK(mm[i], 0, readBuf))
+		readLenString1 = getRunLengthEncoding(getReadsForK(mm[i], 1, readBuf))
 
 		if mm[i].Means[0] < mm[i].Means[1] {
 			ans.Samples[i].FormatData[2] = fmt.Sprintf("%.1f,%.1f", mm[i].Means[0], mm[i].Means[1])
 			ans.Samples[i].FormatData[3] = fmt.Sprintf("%.1f,%.1f", mm[i].Stdev[0], mm[i].Stdev[1])
 			ans.Samples[i].FormatData[4] = fmt.Sprintf("%.1f,%.1f", mm[i].Weights[0], mm[i].Weights[1])
+			ans.Samples[i].FormatData[6] = fmt.Sprintf("%d,%d", allele0Reads, allele1Reads)
+			ans.Samples[i].FormatData[7] = fmt.Sprintf("%.3f,%.3f", goodnessOfFit0, goodnessOfFit1)
+			ans.Samples[i].FormatData[8] = fmt.Sprintf("%d,%d", minKsLen0, minKsLen1)
+			ans.Samples[i].FormatData[9] = fmt.Sprintf("%.3f,%.3f", pulseHeuristic0, pulseHeuristic1)
+			ans.Samples[i].FormatData[10] = fmt.Sprintf("%d,%d", optimalHeuristicLen0, optimalHeuristicLen1)
+			ans.Samples[i].FormatData[11] = fmt.Sprintf("%s;%s", readLenString0, readLenString1)
 		} else {
 			ans.Samples[i].FormatData[2] = fmt.Sprintf("%.1f,%.1f", mm[i].Means[1], mm[i].Means[0])
 			ans.Samples[i].FormatData[3] = fmt.Sprintf("%.1f,%.1f", mm[i].Stdev[1], mm[i].Stdev[0])
 			ans.Samples[i].FormatData[4] = fmt.Sprintf("%.1f,%.1f", mm[i].Weights[1], mm[i].Weights[0])
+			ans.Samples[i].FormatData[6] = fmt.Sprintf("%d,%d", allele1Reads, allele0Reads)
+			ans.Samples[i].FormatData[7] = fmt.Sprintf("%.3f,%.3f", goodnessOfFit1, goodnessOfFit0)
+			ans.Samples[i].FormatData[8] = fmt.Sprintf("%d,%d", minKsLen1, minKsLen0)
+			ans.Samples[i].FormatData[9] = fmt.Sprintf("%.3f,%.3f", pulseHeuristic1, pulseHeuristic0)
+			ans.Samples[i].FormatData[10] = fmt.Sprintf("%d,%d", optimalHeuristicLen1, optimalHeuristicLen0)
+			ans.Samples[i].FormatData[11] = fmt.Sprintf("%s;%s", readLenString1, readLenString0)
 		}
-		ans.Samples[i].FormatData[5] = fmt.Sprintf("%.1g", mm[i].LogLikelihood)
 	}
 
-	info := new(strings.Builder)
-	info.WriteString(fmt.Sprintf("RefLength=%d", refRepeatLen))
-	/*
-		info.WriteString(";Means=")
-		for i, j := range mm[0].Means {
-			if i > 0 {
-				info.WriteByte(',')
-			}
-			info.WriteString(fmt.Sprintf("%.1f", j))
-		}
-		info.WriteString(";Stdev=")
-		for i, j := range mm[0].Stdev {
-			if i > 0 {
-				info.WriteByte(',')
-			}
-			info.WriteString(fmt.Sprintf("%.1f", j))
-		}
-		info.WriteString(";Weights=")
-		for i, j := range mm[0].Weights {
-			if i > 0 {
-				info.WriteByte(',')
-			}
-			info.WriteString(fmt.Sprintf("%.1f", j))
-		}
-	*/
-	ans.Info = info.String()
-
+	ans.Info = fmt.Sprintf("RefLength=%d", refRepeatLen)
 	return ans, true
 }
 
@@ -527,9 +546,31 @@ func generateVcfHeader(samples string, referenceFile string) vcf.Header {
 	header.Text = append(header.Text, "##FORMAT=<ID=SD,Number=2,Type=Float,Description=\"Standard deviation of the repeat length of each allele determined by gaussian mixture modelling.\">")
 	header.Text = append(header.Text, "##FORMAT=<ID=WT,Number=2,Type=Float,Description=\"Weight assigned to each allele (rough estimate of allele frequency) determined by gaussian mixture modelling.\">")
 	header.Text = append(header.Text, "##FORMAT=<ID=LL,Number=1,Type=Float,Description=\"Negative log likelihood of gaussian mixture model.\">")
+	header.Text = append(header.Text, "##FORMAT=<ID=AD,Number=2,Type=Integer,Description=\"Number of reads assigned to each allele based on posteriors from gaussian modelling.\">")
+	header.Text = append(header.Text, "##FORMAT=<ID=KS,Number=2,Type=Float,Description=\"Kolmogorov-Smirnov (KS) statistic for fit of data to oscillating slippage model dependent on repeat unit length.\">")
+	header.Text = append(header.Text, "##FORMAT=<ID=CG,Number=2,Type=Integer,Description=\"Optimal repeat length fit as determined by minimum KS statistic.\">")
+	header.Text = append(header.Text, "##FORMAT=<ID=HS,Number=2,Type=Float,Description=\"Heuristic score for fit of data to oscillating slippage model dependent on repeat unit length. Higher values indicate better fit to slippage model\">")
+	header.Text = append(header.Text, "##FORMAT=<ID=HG,Number=2,Type=Integer,Description=\"Optimal repeat length fit as determined by maximum heuristic score.\">")
+	header.Text = append(header.Text, "##FORMAT=<ID=RL,Number=2,Type=String,Description=\"Run length encoding of read lengths for each allele separated by semicolons.\">")
 	header.Text = append(header.Text, "##INFO=<ID=RefLength,Number=1,Type=Integer,Description=\"Length in bp of the repeat in the reference genome.\">")
 	header.Text = append(header.Text, fmt.Sprintf("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t%s", strings.Replace(samples, ".bam", "", -1)))
 	return header
+}
+
+func sliceToCounts(s []float64) (val []float64, count []int) {
+	m := make(map[float64]int)
+	for i := range s {
+		m[s[i]]++
+	}
+	for k := range m {
+		val = append(val, k)
+	}
+
+	slices.Sort(val)
+	for i := range val {
+		count = append(count, m[val[i]])
+	}
+	return
 }
 
 func plot(observedLengths [][]int, minReads int, mm []*gmm.MixtureModel, gaussians [][]float64) {
@@ -594,10 +635,10 @@ func gaussianHist(weight, mean, stdev float64) []float64 {
 	return y
 }
 
-func gaussianY(x, a, b, c float64) float64 {
-	top := math.Pow(x-b, 2)
-	bot := 2 * c * c
-	return a * math.Exp(-top/bot)
+func gaussianY(x, weight, mean, stdev float64) float64 {
+	top := math.Pow(x-mean, 2)
+	bot := 2 * stdev * stdev
+	return weight * math.Exp(-top/bot)
 }
 
 func printLengths(a [][]int) string {
@@ -645,4 +686,178 @@ func runMixtureModel(data []int, mm, bestMm *gmm.MixtureModel, f *[]float64) (co
 func cleanup(f io.Closer) {
 	err := f.Close()
 	exception.PanicOnErr(err)
+}
+
+func testPulseFitHeuristic(mm *gmm.MixtureModel, k, period int, print bool) (float64, int, int) {
+	var readsIncluded, readLen int
+	var maxFitSum, startFitSum, lessFitSum, moreFitSum, startVal, lessVal, moreVal float64
+
+	// test original peak as well as +/- 1 to account for slip-up/down bias
+	var startPeak, lessPeak, morePeak, bestPeak int
+	startPeak = int(math.Round(mm.Means[k]))
+	lessPeak = startPeak - 1
+	morePeak = startPeak + 1
+
+	for i := range mm.Data {
+		readLen = int(mm.Data[i])
+		if getMaxK(mm.Posteriors, i) != k {
+			continue
+		}
+		readsIncluded++
+		startVal = gaussianY(mm.Data[i], 1, float64(startPeak), mm.Stdev[k]) // TODO values could be cached
+		lessVal = gaussianY(mm.Data[i], 1, float64(lessPeak), mm.Stdev[k])
+		moreVal = gaussianY(mm.Data[i], 1, float64(morePeak), mm.Stdev[k])
+
+		if (startPeak-readLen)%period == 0 {
+			startFitSum += startVal
+		} else {
+			startFitSum -= 1
+		}
+
+		if (lessPeak-readLen)%period == 0 {
+			lessFitSum += lessVal
+		} else {
+			lessFitSum -= 1
+		}
+
+		if (morePeak-readLen)%period == 0 {
+			moreFitSum += moreVal
+		} else {
+			moreFitSum -= 1
+		}
+	}
+
+	maxFitSum = math.Max(startFitSum, math.Max(lessFitSum, moreFitSum))
+	switch maxFitSum {
+	case startFitSum:
+		bestPeak = startPeak
+	case lessFitSum:
+		bestPeak = lessPeak
+	case moreFitSum:
+		bestPeak = morePeak
+	}
+
+	if print {
+		log.Printf("Pulse fit heuristic:\tlen=%d\tvalue=%0.2f\treads=%d\n", lessPeak, ((lessFitSum/float64(readsIncluded))+1)/2, readsIncluded)
+		log.Printf("Pulse fit heuristic:\tlen=%d\tvalue=%0.2f\treads=%d\n", startPeak, ((startFitSum/float64(readsIncluded))+1)/2, readsIncluded)
+		log.Printf("Pulse fit heuristic:\tlen=%d\tvalue=%0.2f\treads=%d\n", morePeak, ((moreFitSum/float64(readsIncluded))+1)/2, readsIncluded)
+	}
+	return ((maxFitSum / float64(readsIncluded)) + 1) / 2, readsIncluded, bestPeak
+}
+
+func testPulseFitKS(mm *gmm.MixtureModel, k, period int, buf *[2][11]float64, readBuf *[]float64, print bool) (float64, int, int) {
+	// test original peak as well as +/- 1 to account for slip-up/down bias
+	var startPeak, lessPeak, morePeak int
+	startPeak = int(math.Round(mm.Means[k]))
+	lessPeak = startPeak - 1
+	morePeak = startPeak + 1
+
+	slices.Sort(mm.Data)
+	reads := getReadsForK(mm, k, readBuf)
+
+	expectedK0lessVal, expectedK0lessWeight := getExpectedValuesForK(mm, k, buf, lessPeak, period, true)
+	ansLess := stat.KolmogorovSmirnov(reads, nil, expectedK0lessVal, expectedK0lessWeight)
+	if print {
+		//fmt.Println(reads)
+		//fmt.Println(expectedK0lessVal)
+		//fmt.Println(expectedK0lessWeight)
+		fmt.Printf("k=%d reads=%d peak=%d, ks=%0.4f\n", k, len(reads), lessPeak, ansLess)
+	}
+
+	expectedK0startVal, expectedK0startWeight := getExpectedValuesForK(mm, k, buf, startPeak, period, false)
+	ansStart := stat.KolmogorovSmirnov(reads, nil, expectedK0startVal, expectedK0startWeight)
+	if print {
+		//fmt.Println(expectedK0startVal)
+		//fmt.Println(expectedK0startWeight)
+		fmt.Printf("k=%d reads=%d peak=%d, ks=%0.4f\n", k, len(reads), startPeak, ansStart)
+	}
+
+	expectedK0moreVal, expectedK0moreWeight := getExpectedValuesForK(mm, k, buf, morePeak, period, false)
+	ansMore := stat.KolmogorovSmirnov(reads, nil, expectedK0moreVal, expectedK0moreWeight)
+	if print {
+		//fmt.Println(expectedK0moreVal)
+		//fmt.Println(expectedK0moreWeight)
+		fmt.Printf("k=%d reads=%d peak=%d, ks=%0.4f\n", k, len(reads), morePeak, ansMore)
+	}
+
+	minScore := min(ansStart, min(ansLess, ansMore))
+	switch minScore {
+	case ansStart:
+		return ansStart, len(reads), startPeak
+	case ansLess:
+		return ansLess, len(reads), lessPeak
+	case ansMore:
+		return ansMore, len(reads), morePeak
+	default:
+		panic("unreachable")
+		return 6, 6, 6
+	}
+}
+
+func getReadsForK(mm *gmm.MixtureModel, k int, readBuf *[]float64) []float64 {
+	*readBuf = (*readBuf)[:0]
+	if cap(*readBuf) < len(mm.Data) {
+		*readBuf = make([]float64, 0, len(mm.Data))
+	}
+
+	for i := range mm.Data {
+		if getMaxK(mm.Posteriors, i) != k {
+			continue
+		}
+		*readBuf = append(*readBuf, mm.Data[i])
+	}
+	return *readBuf
+}
+
+func getExpectedValuesForK(mm *gmm.MixtureModel, k int, buf *[2][11]float64, peak, period int, updateWeights bool) ([]float64, []float64) {
+	var currLen int = peak - (5 * period)
+	for i := 0; i < 11; i++ {
+		(*buf)[0][i] = float64(currLen)
+		if updateWeights {
+			(*buf)[1][i] = gaussianY(float64(currLen), 1, float64(peak), mm.Stdev[k])
+		}
+		currLen += period
+	}
+	return (*buf)[0][:], (*buf)[1][:]
+}
+
+func getMaxK(posteriors [][]float64, i int) int {
+	var maxK int
+	var maxVal float64
+	for k := range posteriors {
+		if posteriors[k][i] > maxVal {
+			maxK = k
+			maxVal = posteriors[k][i]
+		}
+	}
+	return maxK
+}
+
+func min(a, b float64) float64 {
+	if a < b {
+		return a
+	} else {
+		return b
+	}
+}
+
+func getRunLengthEncoding(s []float64) string {
+	ans := new(strings.Builder)
+	var currVal float64
+	var currCount int
+
+	for i := range s {
+		if s[i] != currVal {
+			if ans.Len() == 0 && currVal != 0 {
+				ans.WriteString(fmt.Sprintf("%d=%d", int(currVal), currCount))
+			} else if currVal != 0 {
+				ans.WriteString(fmt.Sprintf(",%d=%d", int(currVal), currCount))
+			}
+			currVal = s[i]
+			currCount = 1
+		} else {
+			currCount++
+		}
+	}
+	return ans.String()
 }

@@ -19,7 +19,7 @@ type MixtureModel struct {
 	MaxIter        int         // maximum number of iterations for EM step. 0 is until convergence
 	LogLikelihood  float64     // negative likelihood to be minimized
 	residuals      [][]float64 // first index is component, second index is data point
-	posteriors     [][]float64 // posterior values for each data point for each gaussian
+	Posteriors     [][]float64 // posterior values for each data point for each gaussian
 	posteriorsSum  []float64   // sum of posteriors above. len(posteriorsSum) == k
 	lamSigRatio    []float64   // holds the ratio of Weights to Stdev
 	logLamSigRatio []float64   // holds the natural log of lamSigRatio
@@ -33,8 +33,26 @@ type MixtureModel struct {
 // converged, and how many iterations it took to converge. If converged == false, the results in mm are meaningless.
 //
 // To reduce the number of allocations required for repeated use of RunMixtureModel, the input mixture model 'mm' can be reused between calls
+// with no modifications necessary
+func RunMixtureModel(data []float64, k, maxIterations, maxResets int, mm *MixtureModel) (converged bool, iterationsRun int) {
+	return runMixtureModel(expectationGaussian, data, k, 0, maxIterations, maxResets, mm)
+}
+
+// RunPulseMixtureModel functions identically to RunMixtureModel, but instead of a guassian, we use a guassian-weighted pulse wave to evaluate
+// data with expected gaps between values.
+func RunPulseMixtureModel(data []float64, k, pulsePeriod, maxIterations, maxResets int, mm *MixtureModel) (converged bool, iterationsRun int) {
+	return runMixtureModel(expectationPulse, data, k, pulsePeriod, maxIterations, maxResets, mm)
+}
+
+// RunMixtureModel uses the expectation-maximization (EM) algorithm to find a mixture of k gaussian distributions that fit the input data slice.
+// Note that this version of RunMixtureModel only works on 1d data. The EM algorithm works by iteratively refining the model until the performance
+// of the model is no longer improving (i.e. it has converged). RunMixtureModel will iterate a maximum of maxIterations until retrying with new
+// starting values until convergence or maxResets. RunMixtureModel will store the results of the model in mm and will return whether the model
+// converged, and how many iterations it took to converge. If converged == false, the results in mm are meaningless.
+//
+// To reduce the number of allocations required for repeated use of RunMixtureModel, the input mixture model 'mm' can be reused between calls
 // with no modifications necessaryn
-func RunMixtureModel(data []float64, k int, maxIterations int, maxResets int, mm *MixtureModel) (converged bool, iterationsRun int) {
+func runMixtureModel(expectationFunc func(*MixtureModel, int), data []float64, k int, pulsePeriod int, maxIterations, maxResets int, mm *MixtureModel) (converged bool, iterationsRun int) {
 	if len(data) == 0 {
 		return
 	}
@@ -46,7 +64,7 @@ func RunMixtureModel(data []float64, k int, maxIterations int, maxResets int, mm
 
 		// E step
 		prevLogLikelihood = mm.LogLikelihood
-		expectation(mm)
+		expectationFunc(mm, pulsePeriod)
 		if iterationsRun > 2 && math.Abs(mm.LogLikelihood-prevLogLikelihood) < logProbEpsilon {
 			converged = true
 		}
@@ -132,19 +150,19 @@ func initMixtureModel(data []float64, k int, maxIterations int, mm *MixtureModel
 
 	if cap(mm.residuals) >= k {
 		mm.residuals = mm.residuals[0:k]
-		mm.posteriors = mm.posteriors[0:k]
+		mm.Posteriors = mm.Posteriors[0:k]
 	} else {
 		mm.residuals = make([][]float64, k)
-		mm.posteriors = make([][]float64, k)
+		mm.Posteriors = make([][]float64, k)
 	}
 
 	for i := range mm.residuals {
 		if cap(mm.residuals[i]) >= len(data) {
 			mm.residuals[i] = mm.residuals[i][0:len(data)]
-			mm.posteriors[i] = mm.posteriors[i][0:len(data)]
+			mm.Posteriors[i] = mm.Posteriors[i][0:len(data)]
 		} else {
 			mm.residuals[i] = make([]float64, len(data))
-			mm.posteriors[i] = make([]float64, len(data))
+			mm.Posteriors[i] = make([]float64, len(data))
 		}
 	}
 
@@ -174,7 +192,7 @@ func resetResSum(mm *MixtureModel) {
 
 // expectation is the first half of the EM algorithm and determines how well the observed data fit the current model
 // adapted from https://github.com/cran/mixtools/blob/master/src/normpost.c
-func expectation(mm *MixtureModel) {
+func expectationGaussian(mm *MixtureModel, ignore int) {
 	var r, x, min, rowsum float64
 	var i, j, minj int
 	mm.LogLikelihood = -float64(len(mm.Data)/2) * 0.91893853320467274178 // -n/2 * log(2pi)
@@ -217,11 +235,76 @@ func expectation(mm *MixtureModel) {
 		   divided by the normal density with the largest st'dized resid
 		   Thus, dividing by rowsum gives the posteriors: */
 		for j = 0; j < mm.K; j++ {
-			mm.posteriors[j][i] = mm.work[j] / rowsum
+			mm.Posteriors[j][i] = mm.work[j] / rowsum
 		}
 		/* Finally, adjust the loglikelihood correctly */
 		mm.LogLikelihood += math.Log(rowsum) - min + mm.logLamSigRatio[minj]
 	}
+}
+
+// expectation is the first half of the EM algorithm and determines how well the observed data fit the current model
+// adapted from https://github.com/cran/mixtools/blob/master/src/normpost.c
+func expectationPulse(mm *MixtureModel, pulsePeriod int) {
+	var r, x, min, rowsum float64
+	var i, j, minj int
+	mm.LogLikelihood = -float64(len(mm.Data)/2) * 0.91893853320467274178 // -n/2 * log(2pi)
+	for i = 0; i < mm.K; i++ {
+		mm.lamSigRatio[i] = mm.Weights[i] / mm.Stdev[i]
+		mm.logLamSigRatio[i] = math.Log(mm.lamSigRatio[i])
+	}
+
+	for i = range mm.Data {
+		x = mm.Data[i]
+		for j = 0; j < mm.K; j++ {
+			r = x - mm.Means[j]
+			r = r * r
+			if outsidePeriod(mm.Means[j], mm.Data[i], pulsePeriod) {
+				//fmt.Println("outside period", mm.Means[j], mm.Data[i], r)
+				//r += 10 // TODO REFINE PENALTY FOR FALLING OUTSIDE PERIOD
+			} else {
+				//fmt.Println("inside period", mm.Means[j], mm.Data[i])
+			}
+			mm.residuals[j][i] = r
+			r = r / (2 * mm.Stdev[j] * mm.Stdev[j])
+			mm.work[j] = r
+
+			/* Keep track of the smallest standardized squared residual.
+			   By dividing everything by the component density with the
+			   smallest such residual, the denominator of the posterior
+			   is guaranteed to be at least one and cannot be infinite unless
+			   the values of lambda or sigma are very large or small. This helps
+			   prevent numerical problems when calculating the posteriors.*/
+			if j == 0 || r < min {
+				minj = j
+				min = r
+			}
+		}
+		/* At this stage, work contains the squared st'dized resids over 2 */
+		rowsum = 1
+		for j = 0; j < mm.K; j++ {
+			if j == minj {
+				mm.work[j] = 1
+			} else {
+				mm.work[j] = (mm.lamSigRatio[j] / mm.lamSigRatio[minj]) * math.Exp(min-mm.work[j])
+				//fmt.Println(mm.Means[j], mm.Data[i], mm.work[j])
+				rowsum += mm.work[j]
+			}
+		}
+		//fmt.Println(mm.Means, mm.Data[i], rowsum)
+		/* At this stage, work contains the normal density at data[i]
+		   divided by the normal density with the largest st'dized resid
+		   Thus, dividing by rowsum gives the posteriors: */
+		for j = 0; j < mm.K; j++ {
+			mm.Posteriors[j][i] = mm.work[j] / rowsum
+		}
+		/* Finally, adjust the loglikelihood correctly */
+		//fmt.Println(mm.Means, mm.Data[i], math.Log(rowsum)-min+mm.logLamSigRatio[minj], math.Log(rowsum), min)
+		mm.LogLikelihood += math.Log(rowsum) - min + mm.logLamSigRatio[minj]
+	}
+}
+
+func outsidePeriod(mean, value float64, period int) bool {
+	return int(math.Round(mean-value))%period != 0
 }
 
 // maximization is the second half of the EM algorithm and generates a new model based on the performance of the previous model
@@ -229,7 +312,7 @@ func maximization(mm *MixtureModel) {
 	resetResSum(mm)
 	for i := range mm.Data {
 		for j := 0; j < mm.K; j++ {
-			mm.posteriorsSum[j] += mm.posteriors[j][i]
+			mm.posteriorsSum[j] += mm.Posteriors[j][i]
 		}
 	}
 
@@ -243,7 +326,7 @@ func maximization(mm *MixtureModel) {
 		mu = 0
 		std = 0
 		for i := range mm.Data {
-			mu += mm.posteriors[j][i] * mm.Data[i]
+			mu += mm.Posteriors[j][i] * mm.Data[i]
 		}
 
 		if mm.posteriorsSum[j] > 0 {
@@ -251,7 +334,7 @@ func maximization(mm *MixtureModel) {
 		}
 
 		for i := range mm.Data {
-			std += mm.posteriors[j][i] * mm.residuals[j][i]
+			std += mm.Posteriors[j][i] * mm.residuals[j][i]
 		}
 
 		if mm.posteriorsSum[j] > 0 {

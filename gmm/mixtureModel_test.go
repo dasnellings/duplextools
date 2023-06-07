@@ -11,26 +11,30 @@ import (
 
 func TestRunMixtureModel(t *testing.T) {
 	rand.Seed(time.Now().UnixNano())
-	data := []float64{16, 29, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 38, 38, 40, 40, 40, 40, 40, 40}
-	//data := []float64{34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 38, 38, 40, 40, 40, 40, 40, 40}
+	//data := []float64{16, 29, 34, 34, 34, 34, 34, 34, 34, 34, 34, 34, 38, 38, 40, 40, 40, 40, 40, 40}
+	data := []float64{32, 32, 34, 34, 34, 36, 36, 36, 36, 36, 36, 38, 38, 38, 40, 40, 48, 48, 50, 50, 50, 52, 52, 52, 52, 52, 52, 52, 52, 54, 54, 54, 56, 56, 70, 35}
 
 	maxIterations := 50
 	maxResets := 100
 	mm := new(MixtureModel)
 	var converged bool
 	var iterationsRun int
-	for i := 0; i < 10; i++ {
-		converged, iterationsRun = RunMixtureModel(data, 2, maxIterations, maxResets, mm)
-		fmt.Println(mm.Means, mm.Stdev, mm.Weights, iterationsRun, converged, mm.LogLikelihood)
-		//plot(data, mm)
-		//for j := range mm.Data {
-		//	fmt.Println(mm.Data[j], mm.posteriors[0][j], mm.posteriors[1][j])
-		//}
-		//fmt.Println(mm.Weights)
-		//fmt.Println(mm.LogLikelihood)
-		//fmt.Println(mm.Stdev)
-		//fmt.Println()
+	//for i := 0; i < 10; i++ {
+	converged, iterationsRun = RunPulseMixtureModel(data, 2, 2, maxIterations, maxResets, mm)
+	fmt.Sprintln(mm.Means, mm.Stdev, mm.Weights, iterationsRun, converged, mm.LogLikelihood)
+
+	for i := range mm.Data {
+		fmt.Printf("%d\t%0.1f:%0.2f\t%0.1f:%0.2f\n", int(mm.Data[i]), mm.Means[0], mm.posteriors[0][i], mm.Means[1], mm.posteriors[1][i])
 	}
+	//plot(data, mm)
+	//for j := range mm.Data {
+	//	fmt.Println(mm.Data[j], mm.posteriors[0][j], mm.posteriors[1][j])
+	//}
+	//fmt.Println(mm.Weights)
+	//fmt.Println(mm.LogLikelihood)
+	//fmt.Println(mm.Stdev)
+	//fmt.Println()
+	//}
 }
 
 // generate data from a normal distribution with noise
