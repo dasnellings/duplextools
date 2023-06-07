@@ -3,8 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/dasnellings/MCS_MS/barcode"
-	"github.com/dasnellings/MCS_MS/fai"
+	"github.com/dasnellings/duplexTools/barcode"
+	"github.com/dasnellings/duplexTools/fai"
 	"github.com/pkg/profile"
 	"github.com/vertgenlab/gonomics/bed"
 	"github.com/vertgenlab/gonomics/cigar"

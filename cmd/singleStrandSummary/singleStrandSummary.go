@@ -3,8 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/dasnellings/MCS_MS/context"
-	"github.com/dasnellings/MCS_MS/strand"
+	"github.com/dasnellings/duplexTools/context"
+	"github.com/dasnellings/duplexTools/strand"
 	"github.com/vertgenlab/gonomics/exception"
 	"github.com/vertgenlab/gonomics/fasta"
 	"github.com/vertgenlab/gonomics/fileio"

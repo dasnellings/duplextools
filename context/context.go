@@ -1,7 +1,7 @@
 package context
 
 import (
-	"github.com/dasnellings/MCS_MS/strand"
+	"github.com/dasnellings/duplexTools/strand"
 	"github.com/vertgenlab/gonomics/dna"
 	"github.com/vertgenlab/gonomics/fasta"
 	"github.com/vertgenlab/gonomics/vcf"
