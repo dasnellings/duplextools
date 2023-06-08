@@ -61,6 +61,7 @@ func main() {
 	strandedDepth := flag.Int("s", 4, "Minimum depth of independent watson and crick strands for variant consideration. When set to 0, caller runs in unstranded mode merging read counts from watson and crick strands.")
 	endPad := flag.Int("ignoreEnds", 3, "Ignore bases within # of end of a read.")
 	minMapQ := flag.Int("minMapQ", 20, "Minimum mapping quality.")
+	minReadFamilyLength := flag.Int("minReadFamilyLength", 100, "Minimum length in bp of read family for inclusion in analysis. Empirical evidence suggests errors are more common in small fragments.")
 	maxSoftClipFraction := flag.Float64("maxSoftClipFraction", 0.2, "Maximum fraction of read that may be soft clipped.")
 	countOverlappingPairs := flag.Bool("countOverlappingPairs", false, "Count both reads in overlapping regions of read pairs. By only 1 base is contributed in overlapping regions of read pairs.")
 	allowSuppAln := flag.Bool("allowSupplementaryAlignments", false, "Allow variants using reads that have supplementary alignments annotated.")
@@ -103,16 +104,16 @@ func main() {
 		log.Fatal("ERROR: -s * 2 should not be larger than -a")
 	}
 
-	mcsCallVariants(*input, *output, *ref, *bedFile, excludeBeds, uint8(*minMapQ), *totalDepth, *strandedDepth, *allowSuppAln, *minAf, *minBaseQuality, *minContigSize, *baseQualPenalty, *maxSoftClipFraction, *endPad, *maxOverlappingFamilies, *countOverlappingPairs, *callSingleStrand, *debugLevel, *threads, *debugOut)
+	mcsCallVariants(*input, *output, *ref, *bedFile, excludeBeds, uint8(*minMapQ), *totalDepth, *strandedDepth, *allowSuppAln, *minAf, *minBaseQuality, *minContigSize, *minReadFamilyLength, *baseQualPenalty, *maxSoftClipFraction, *endPad, *maxOverlappingFamilies, *countOverlappingPairs, *callSingleStrand, *debugLevel, *threads, *debugOut)
 }
 
-func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, minMapQ uint8, minTotalDepth, minStrandedDepth int, allowSuppAln bool, minAf float64, minBaseQuality, minContigSize int, baseQualPenalty, maxSoftClipFraction float64, endPad, maxOverlappingFamilies int, countOverlappingPairs, callSingleStrand bool, debugLevel, threads int, debugOut string) {
+func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, minMapQ uint8, minTotalDepth, minStrandedDepth int, allowSuppAln bool, minAf float64, minBaseQuality, minContigSize, minReadFamilyLength int, baseQualPenalty, maxSoftClipFraction float64, endPad, maxOverlappingFamilies int, countOverlappingPairs, callSingleStrand bool, debugLevel, threads int, debugOut string) {
 	// progress tracking
 	startTime := time.Now().UnixMilli()
 
 	//var excludedRegions map[string]*interval.IntervalNode
 	refIdx := fai.ReadIndex(ref + ".fai")
-	bedFile, _ = filterInputBed(bedFile, excludeBeds, maxOverlappingFamilies, minTotalDepth, minStrandedDepth, minContigSize, refIdx)
+	bedFile, _ = filterInputBed(bedFile, excludeBeds, maxOverlappingFamilies, minTotalDepth, minStrandedDepth, minContigSize, minReadFamilyLength, refIdx)
 	calledSitesBed := fileio.EasyCreate(strings.TrimSuffix(bedFile, ".bed") + ".calledSites.bed")
 	defer cleanup(calledSitesBed)
 	vcfOut := fileio.EasyCreate(output)
@@ -1084,7 +1085,7 @@ func sclipTerminalIns(s *sam.Sam) {
 	}
 }
 
-func filterInputBed(bedFile string, excludeBeds []string, maxOverlaps, minTotalDepth, minStrandedDepth, minContigSize int, refIdx fai.Index) (string, map[string]*interval.IntervalNode) {
+func filterInputBed(bedFile string, excludeBeds []string, maxOverlaps, minTotalDepth, minStrandedDepth, minContigSize, minReadFamilyLength int, refIdx fai.Index) (string, map[string]*interval.IntervalNode) {
 	var excludeIntervals []interval.Interval
 	var tree map[string]*interval.IntervalNode
 	for _, e := range excludeBeds {
@@ -1102,6 +1103,9 @@ func filterInputBed(bedFile string, excludeBeds []string, maxOverlaps, minTotalD
 	var watsonDepth, crickDepth int
 	for b := range beds {
 		if refIdx.Size(b.Chrom) < minContigSize {
+			continue
+		}
+		if b.ChromEnd-b.ChromStart < minReadFamilyLength {
 			continue
 		}
 		switch {
