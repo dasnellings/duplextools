@@ -61,6 +61,7 @@ func main() {
 	strandedDepth := flag.Int("s", 4, "Minimum depth of independent watson and crick strands for variant consideration. When set to 0, caller runs in unstranded mode merging read counts from watson and crick strands.")
 	endPad := flag.Int("ignoreEnds", 3, "Ignore bases within # of end of a read.")
 	minMapQ := flag.Int("minMapQ", 20, "Minimum mapping quality.")
+	maxSoftClipFraction := flag.Float64("maxSoftClipFraction", 0.2, "Maximum fraction of read that may be soft clipped.")
 	countOverlappingPairs := flag.Bool("countOverlappingPairs", false, "Count both reads in overlapping regions of read pairs. By only 1 base is contributed in overlapping regions of read pairs.")
 	allowSuppAln := flag.Bool("allowSupplementaryAlignments", false, "Allow variants using reads that have supplementary alignments annotated.")
 	minAf := flag.Float64("minAF", 0.9, "Minimum fraction of reads with alternate allele **Within a read family and within strand** to be considered a variant.")
@@ -102,10 +103,10 @@ func main() {
 		log.Fatal("ERROR: -s * 2 should not be larger than -a")
 	}
 
-	mcsCallVariants(*input, *output, *ref, *bedFile, excludeBeds, uint8(*minMapQ), *totalDepth, *strandedDepth, *allowSuppAln, *minAf, *minBaseQuality, *minContigSize, *baseQualPenalty, *endPad, *maxOverlappingFamilies, *countOverlappingPairs, *callSingleStrand, *debugLevel, *threads, *debugOut)
+	mcsCallVariants(*input, *output, *ref, *bedFile, excludeBeds, uint8(*minMapQ), *totalDepth, *strandedDepth, *allowSuppAln, *minAf, *minBaseQuality, *minContigSize, *baseQualPenalty, *maxSoftClipFraction, *endPad, *maxOverlappingFamilies, *countOverlappingPairs, *callSingleStrand, *debugLevel, *threads, *debugOut)
 }
 
-func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, minMapQ uint8, minTotalDepth, minStrandedDepth int, allowSuppAln bool, minAf float64, minBaseQuality, minContigSize int, baseQualPenalty float64, endPad, maxOverlappingFamilies int, countOverlappingPairs, callSingleStrand bool, debugLevel, threads int, debugOut string) {
+func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, minMapQ uint8, minTotalDepth, minStrandedDepth int, allowSuppAln bool, minAf float64, minBaseQuality, minContigSize int, baseQualPenalty, maxSoftClipFraction float64, endPad, maxOverlappingFamilies int, countOverlappingPairs, callSingleStrand bool, debugLevel, threads int, debugOut string) {
 	// progress tracking
 	startTime := time.Now().UnixMilli()
 
@@ -134,7 +135,7 @@ func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, m
 	calledSitesBedChan := make(chan bed.Bed, 1000)
 	for i := 0; i < threads; i++ {
 		wg.Add(1)
-		go spawnThread(bedChan, outputChan, calledSitesBedChan, input, ref, minMapQ, minAf, minBaseQuality, baseQualPenalty, endPad, minTotalDepth, minStrandedDepth, allowSuppAln, countOverlappingPairs, callSingleStrand, wg, debugOutChan)
+		go spawnThread(bedChan, outputChan, calledSitesBedChan, input, ref, minMapQ, minAf, minBaseQuality, baseQualPenalty, maxSoftClipFraction, endPad, minTotalDepth, minStrandedDepth, allowSuppAln, countOverlappingPairs, callSingleStrand, wg, debugOutChan)
 	}
 
 	// spawn a goroutine to wait until threads are done, then close the output
@@ -193,7 +194,7 @@ func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, m
 	exception.PanicOnErr(err)
 }
 
-func spawnThread(inputChan <-chan bed.Bed, outputChan chan<- []vcf.Vcf, calledSitesBedChan chan<- bed.Bed, inputBam, ref string, minMapQ uint8, minAf float64, minBaseQuality int, baseQualPenalty float64, endPad, minTotalDepth, minStrandedDepth int, allowSuppAln, countOverlappingPairs, callSingleStrand bool, wg *sync.WaitGroup, debugOutChan chan<- string) {
+func spawnThread(inputChan <-chan bed.Bed, outputChan chan<- []vcf.Vcf, calledSitesBedChan chan<- bed.Bed, inputBam, ref string, minMapQ uint8, minAf float64, minBaseQuality int, baseQualPenalty, maxSoftClipFraction float64, endPad, minTotalDepth, minStrandedDepth int, allowSuppAln, countOverlappingPairs, callSingleStrand bool, wg *sync.WaitGroup, debugOutChan chan<- string) {
 	bamReader, bamHeader := sam.OpenBam(inputBam)
 	bai := sam.ReadBai(inputBam + ".bai")
 	faSeeker := fasta.NewSeeker(ref, "")
@@ -203,7 +204,7 @@ func spawnThread(inputChan <-chan bed.Bed, outputChan chan<- []vcf.Vcf, calledSi
 	var familyVariants []vcf.Vcf
 	var recycledReads []sam.Sam
 	for b := range inputChan {
-		familyVariants, recycledReads, calledSitesBuffer = callFamily(b, bamReader, bamHeader, faSeeker, bai, minMapQ, minAf, minBaseQuality, baseQualPenalty, endPad, minTotalDepth, minStrandedDepth, allowSuppAln, countOverlappingPairs, callSingleStrand, recycledReads, calledSitesBuffer, calledSitesBedChan, debugOutChan)
+		familyVariants, recycledReads, calledSitesBuffer = callFamily(b, bamReader, bamHeader, faSeeker, bai, minMapQ, minAf, minBaseQuality, baseQualPenalty, maxSoftClipFraction, endPad, minTotalDepth, minStrandedDepth, allowSuppAln, countOverlappingPairs, callSingleStrand, recycledReads, calledSitesBuffer, calledSitesBedChan, debugOutChan)
 		outputChan <- familyVariants
 	}
 
@@ -214,7 +215,7 @@ func spawnThread(inputChan <-chan bed.Bed, outputChan chan<- []vcf.Vcf, calledSi
 	wg.Done()
 }
 
-func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker *fasta.Seeker, bai sam.Bai, minMapQ uint8, minAf float64, minBaseQuality int, baseQualPenalty float64, endPad, minTotalDepth, minStrandedDepth int, allowSuppAln, countOverlappingPairs, callSingleStrand bool, recycledReads []sam.Sam, calledSitesBuffer []uint32, calledSitesBedChan chan<- bed.Bed, debugOutChan chan<- string) ([]vcf.Vcf, []sam.Sam, []uint32) {
+func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker *fasta.Seeker, bai sam.Bai, minMapQ uint8, minAf float64, minBaseQuality int, baseQualPenalty, maxSoftClipFraction float64, endPad, minTotalDepth, minStrandedDepth int, allowSuppAln, countOverlappingPairs, callSingleStrand bool, recycledReads []sam.Sam, calledSitesBuffer []uint32, calledSitesBedChan chan<- bed.Bed, debugOutChan chan<- string) ([]vcf.Vcf, []sam.Sam, []uint32) {
 	var famId string
 	var strand byte
 	//expectedWatsonDepth, _ := strconv.Atoi(b.Annotation[0])
@@ -235,6 +236,9 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker
 			continue
 		}
 		if hasSuppAln(reads[i]) && !allowSuppAln {
+			continue
+		}
+		if softClipFraction(&reads[i]) > maxSoftClipFraction {
 			continue
 		}
 		clipReadEnds(&reads[i], endPad)
@@ -1330,6 +1334,17 @@ func getOrientation(r *sam.Sam) orientation {
 			return F1R2
 		}
 	}
+}
+
+func softClipFraction(r *sam.Sam) float64 {
+	totalLen := len(r.Seq)
+	var sClipCount int
+	for i := range r.Cigar {
+		if r.Cigar[i].Op == 'S' {
+			sClipCount += r.Cigar[i].RunLength
+		}
+	}
+	return float64(sClipCount) / float64(totalLen)
 }
 
 func min(a, b int) int {
