@@ -168,13 +168,14 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 	}
 
 	mm := make([]*gmm.MixtureModel, len(inputFiles))
+	tmpMm := make([]*gmm.MixtureModel, len(inputFiles))
 	for i := 0; i < len(inputFiles); i++ {
 		mm[i] = new(gmm.MixtureModel)
+		tmpMm[i] = new(gmm.MixtureModel)
 	}
-	tmpMm := new(gmm.MixtureModel)
 
 	gaussians := make([][]float64, 2)
-	var floatSlice []float64
+	var floatSlices [][]float64 = make([][]float64, len(inputFiles))
 	var converged, anyConverged, passingVariant bool
 	var repeatUnit []dna.Base
 	for _, region := range targets {
@@ -189,7 +190,7 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 			}
 			slices.Sort(observedLengths[i])
 
-			converged, tmpMm, mm[i] = runMixtureModel(observedLengths[i], tmpMm, mm[i], &floatSlice)
+			converged, tmpMm[i], mm[i] = runMixtureModel(observedLengths[i], tmpMm[i], mm[i], &floatSlices[i])
 			if converged {
 				anyConverged = true
 			}
@@ -204,11 +205,11 @@ func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile
 		}
 
 		if debug > 0 {
-			val, counts := sliceToCounts(mm[0].Data)
-			for i := range val {
-				fmt.Printf("%d:%d\t", int(val[i]), counts[i])
-			}
-			fmt.Println()
+			//val, counts := sliceToCounts(mm[0].Data)
+			//for i := range val {
+			//	fmt.Printf("%d:%d\t", int(val[i]), counts[i])
+			//}
+			//fmt.Println()
 			for i := range mm {
 				for k := range mm[i].Means {
 					fmt.Printf("k=%d mu=%0.2f stdev=%0.2f\tloglikelihood=%0.4g\n", k, mm[i].Means[k], mm[i].Stdev[k], mm[i].LogLikelihood)
@@ -265,11 +266,16 @@ func callGenotypes(ref *fasta.Seeker, region bed.Bed, minReads int, enclosingRea
 	ans.Alt = append(ans.Alt, "*")
 	ans.Filter = "."
 	ans.Id = region.Name
-	ans.Format = []string{"GT", "DP", "MU", "SD", "WT", "LL", "AD", "KS", "CG", "HS", "HG"}
+	ans.Format = []string{"GT", "DP", "MU", "SD", "WT", "LL", "AD", "KS", "CG", "HS", "HG", "RL"}
 	ans.Samples = make([]vcf.Sample, len(mm))
 	var goodnessOfFit0, goodnessOfFit1, pulseHeuristic0, pulseHeuristic1 float64
 	var allele0Reads, allele1Reads, minKsLen0, minKsLen1, optimalHeuristicLen0, optimalHeuristicLen1 int
 	var readLenString0, readLenString1 string
+
+	//for j := range mm[0].Data {
+	//	fmt.Printf("%0.0f, %0.1f, %0.1f\t", mm[0].Data[j], mm[0].Posteriors[0][j], mm[0].Posteriors[1][j])
+	//}
+
 	for i := range ans.Samples {
 		ans.Samples[i].FormatData = make([]string, 12)
 		ans.Samples[i].FormatData[1] = fmt.Sprintf("%d", len(observedLengths[i]))
@@ -752,8 +758,8 @@ func testPulseFitKS(mm *gmm.MixtureModel, k, period int, buf *[2][11]float64, re
 	lessPeak = startPeak - 1
 	morePeak = startPeak + 1
 
-	slices.Sort(mm.Data)
 	reads := getReadsForK(mm, k, readBuf)
+	slices.Sort(reads)
 
 	expectedK0lessVal, expectedK0lessWeight := getExpectedValuesForK(mm, k, buf, lessPeak, period, true)
 	ansLess := stat.KolmogorovSmirnov(reads, nil, expectedK0lessVal, expectedK0lessWeight)
@@ -845,7 +851,6 @@ func getRunLengthEncoding(s []float64) string {
 	ans := new(strings.Builder)
 	var currVal float64
 	var currCount int
-
 	for i := range s {
 		if s[i] != currVal {
 			if ans.Len() == 0 && currVal != 0 {
@@ -859,5 +864,12 @@ func getRunLengthEncoding(s []float64) string {
 			currCount++
 		}
 	}
+
+	if ans.Len() == 0 && currVal != 0 {
+		ans.WriteString(fmt.Sprintf("%d=%d", int(currVal), currCount))
+	} else if currVal != 0 {
+		ans.WriteString(fmt.Sprintf(",%d=%d", int(currVal), currCount))
+	}
+
 	return ans.String()
 }
