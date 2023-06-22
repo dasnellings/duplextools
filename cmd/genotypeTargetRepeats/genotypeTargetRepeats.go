@@ -696,13 +696,15 @@ func cleanup(f io.Closer) {
 
 func testPulseFitHeuristic(mm *gmm.MixtureModel, k, period int, print bool) (float64, int, int) {
 	var readsIncluded, readLen int
-	var maxFitSum, startFitSum, lessFitSum, moreFitSum, startVal, lessVal, moreVal float64
+	var maxFitSum, startFitSum, lessFitSum, moreFitSum, less2FitSum, more2FitSum, startVal, lessVal, moreVal, less2Val, more2Val float64
 
 	// test original peak as well as +/- 1 to account for slip-up/down bias
-	var startPeak, lessPeak, morePeak, bestPeak int
+	var startPeak, lessPeak, morePeak, bestPeak, less2Peak, more2Peak int
 	startPeak = int(math.Round(mm.Means[k]))
 	lessPeak = startPeak - 1
+	less2Peak = startPeak - 2
 	morePeak = startPeak + 1
+	more2Peak = startPeak + 2
 
 	for i := range mm.Data {
 		readLen = int(mm.Data[i])
@@ -713,6 +715,8 @@ func testPulseFitHeuristic(mm *gmm.MixtureModel, k, period int, print bool) (flo
 		startVal = gaussianY(mm.Data[i], 1, float64(startPeak), mm.Stdev[k]) // TODO values could be cached
 		lessVal = gaussianY(mm.Data[i], 1, float64(lessPeak), mm.Stdev[k])
 		moreVal = gaussianY(mm.Data[i], 1, float64(morePeak), mm.Stdev[k])
+		less2Val = gaussianY(mm.Data[i], 1, float64(less2Peak), mm.Stdev[k])
+		more2Val = gaussianY(mm.Data[i], 1, float64(more2Peak), mm.Stdev[k])
 
 		if (startPeak-readLen)%period == 0 {
 			startFitSum += startVal
@@ -730,6 +734,18 @@ func testPulseFitHeuristic(mm *gmm.MixtureModel, k, period int, print bool) (flo
 			moreFitSum += moreVal
 		} else {
 			moreFitSum -= 1
+		}
+
+		if (less2Peak-readLen)%period == 0 {
+			less2FitSum += less2Val
+		} else {
+			less2FitSum -= 1
+		}
+
+		if (more2Peak-readLen)%period == 0 {
+			more2FitSum += more2Val
+		} else {
+			more2FitSum -= 1
 		}
 	}
 
@@ -753,13 +769,24 @@ func testPulseFitHeuristic(mm *gmm.MixtureModel, k, period int, print bool) (flo
 
 func testPulseFitKS(mm *gmm.MixtureModel, k, period int, buf *[2][11]float64, readBuf *[]float64, print bool) (float64, int, int) {
 	// test original peak as well as +/- 1 to account for slip-up/down bias
-	var startPeak, lessPeak, morePeak int
+	var startPeak, lessPeak, morePeak, less2Peak, more2Peak int
 	startPeak = int(math.Round(mm.Means[k]))
 	lessPeak = startPeak - 1
+	less2Peak = startPeak - 2
 	morePeak = startPeak + 1
+	more2Peak = startPeak + 2
 
 	reads := getReadsForK(mm, k, readBuf)
 	slices.Sort(reads)
+
+	expectedK0less2Val, expectedK0less2Weight := getExpectedValuesForK(mm, k, buf, less2Peak, period, true)
+	ansLess2 := stat.KolmogorovSmirnov(reads, nil, expectedK0less2Val, expectedK0less2Weight)
+	if print {
+		//fmt.Println(reads)
+		//fmt.Println(expectedK0lessVal)
+		//fmt.Println(expectedK0lessWeight)
+		fmt.Printf("k=%d reads=%d peak=%d, ks=%0.4f\n", k, len(reads), less2Peak, ansLess2)
+	}
 
 	expectedK0lessVal, expectedK0lessWeight := getExpectedValuesForK(mm, k, buf, lessPeak, period, true)
 	ansLess := stat.KolmogorovSmirnov(reads, nil, expectedK0lessVal, expectedK0lessWeight)
@@ -786,14 +813,26 @@ func testPulseFitKS(mm *gmm.MixtureModel, k, period int, buf *[2][11]float64, re
 		fmt.Printf("k=%d reads=%d peak=%d, ks=%0.4f\n", k, len(reads), morePeak, ansMore)
 	}
 
-	minScore := min(ansStart, min(ansLess, ansMore))
+	expectedK0more2Val, expectedK0more2Weight := getExpectedValuesForK(mm, k, buf, more2Peak, period, false)
+	ansMore2 := stat.KolmogorovSmirnov(reads, nil, expectedK0more2Val, expectedK0more2Weight)
+	if print {
+		//fmt.Println(expectedK0moreVal)
+		//fmt.Println(expectedK0moreWeight)
+		fmt.Printf("k=%d reads=%d peak=%d, ks=%0.4f\n", k, len(reads), more2Peak, ansMore2)
+	}
+
+	minScore := minslice(ansStart, ansLess, ansMore, ansMore2, ansLess2)
 	switch minScore {
 	case ansStart:
 		return ansStart, len(reads), startPeak
 	case ansLess:
 		return ansLess, len(reads), lessPeak
+	case ansLess2:
+		return ansLess2, len(reads), less2Peak
 	case ansMore:
 		return ansMore, len(reads), morePeak
+	case ansMore2:
+		return ansMore2, len(reads), more2Peak
 	default:
 		panic("unreachable")
 		return 6, 6, 6
@@ -847,6 +886,16 @@ func min(a, b float64) float64 {
 	}
 }
 
+func minslice(vals ...float64) float64 {
+	minval := vals[0]
+	for i := 1; i < len(vals); i++ {
+		if vals[i] < minval {
+			minval = vals[i]
+		}
+	}
+	return minval
+}
+
 func getRunLengthEncoding(s []float64) string {
 	ans := new(strings.Builder)
 	var currVal float64
@@ -870,6 +919,5 @@ func getRunLengthEncoding(s []float64) string {
 	} else if currVal != 0 {
 		ans.WriteString(fmt.Sprintf(",%d=%d", int(currVal), currCount))
 	}
-
 	return ans.String()
 }
