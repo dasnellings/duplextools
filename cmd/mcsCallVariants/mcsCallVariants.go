@@ -420,9 +420,9 @@ func callFromPilePair(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 	}
 
 	// exclude if watson or crick AF is less than threshold.
-	if float64(watsonAltAlleleCount)/float64(watsonDepth) < minAf || float64(crickAltAlleleCount)/float64(crickDepth) < minAf {
+	if float64(watsonAltAlleleCount)/watsonDepth < minAf || float64(crickAltAlleleCount)/crickDepth < minAf {
 		if debugOutChan != nil {
-			debugOutChan <- fmt.Sprintf("does not meet af requirements\nwatson: (%d/%d) = %f\ncrick: (%d/%d) = %f", watsonAltAlleleCount, watsonDepth, float64(watsonAltAlleleCount)/float64(watsonDepth), crickAltAlleleCount, crickDepth, float64(crickAltAlleleCount)/float64(crickDepth))
+			debugOutChan <- fmt.Sprintf("does not meet af requirements\nwatson: (%d/%f) = %f\ncrick: (%d/%f) = %f", watsonAltAlleleCount, watsonDepth, float64(watsonAltAlleleCount)/float64(watsonDepth), crickAltAlleleCount, crickDepth, float64(crickAltAlleleCount)/float64(crickDepth))
 		}
 		return ans, false
 	}
@@ -486,7 +486,7 @@ func callFromPilePair(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 	return ans, true
 }
 
-func unstrandedCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, minStrandedDepth, minTotalDepth int, header sam.Header, faSeeker *fasta.Seeker, b bed.Bed, debugOutChan chan<- string, mergeDepth int) (vcf.Vcf, bool) {
+func unstrandedCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, minStrandedDepth, minTotalDepth int, header sam.Header, faSeeker *fasta.Seeker, b bed.Bed, debugOutChan chan<- string, mergeDepth float64) (vcf.Vcf, bool) {
 	var mergeDelLen int
 	var mergeInsSeq, chr string
 	var maxMergeBase dna.Base
@@ -517,7 +517,7 @@ func unstrandedCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, minSt
 	}
 
 	// exclude if below minimum read depth
-	if mergeAltAlleleCount < minStrandedDepth || mergeDepth < minTotalDepth {
+	if mergeAltAlleleCount < minStrandedDepth || mergeDepth < float64(minTotalDepth) {
 		if debugOutChan != nil {
 			debugOutChan <- fmt.Sprintf("does not meet minimum read depth, moving on")
 		}
@@ -550,7 +550,7 @@ func unstrandedCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, minSt
 	return ans, true
 }
 
-func singleStrandCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, minStrandedDepth, minTotalDepth int, header sam.Header, faSeeker *fasta.Seeker, b bed.Bed, debugOutChan chan<- string, watsonVarType, crickVarType variantType, maxWatsonBase, maxCrickBase dna.Base, watsonInsSeq, crickInsSeq string, watsonDelLen, crickDelLen int, watsonAltAlleleCount, crickAltAlleleCount, watsonDepth, crickDepth int) (vcf.Vcf, bool) {
+func singleStrandCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, minStrandedDepth, minTotalDepth int, header sam.Header, faSeeker *fasta.Seeker, b bed.Bed, debugOutChan chan<- string, watsonVarType, crickVarType variantType, maxWatsonBase, maxCrickBase dna.Base, watsonInsSeq, crickInsSeq string, watsonDelLen, crickDelLen, watsonAltAlleleCount, crickAltAlleleCount int, watsonDepth, crickDepth float64) (vcf.Vcf, bool) {
 	var refBase []dna.Base
 	var err error
 	var ans vcf.Vcf
@@ -565,7 +565,7 @@ func singleStrandCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 	}
 
 	// exclude if below minimum read depth
-	if watsonAltAlleleCount < minStrandedDepth || crickAltAlleleCount < minStrandedDepth || watsonDepth+crickDepth < minTotalDepth {
+	if watsonAltAlleleCount < minStrandedDepth || crickAltAlleleCount < minStrandedDepth || watsonDepth+crickDepth < float64(minTotalDepth) {
 		if debugOutChan != nil {
 			debugOutChan <- fmt.Sprintf("does not meet minimum read depth, moving on")
 		}
@@ -1250,17 +1250,17 @@ func clipRev(s *sam.Sam, clipLen int) {
 	s.Cigar = cleanCigar(s.Cigar)
 }
 
-func pileDepth(p sam.Pile, baseQualPenalty float64) int {
-	var depth int
+func pileDepth(p sam.Pile, baseQualPenalty float64) float64 {
+	var depth float64
 	var maskCount int
 	for i := range p.CountF {
 		if i == int(dna.N) {
 			maskCount += p.CountF[i] + p.CountR[i]
 			continue
 		}
-		depth += p.CountF[i] + p.CountR[i]
+		depth += float64(p.CountF[i] + p.CountR[i])
 	}
-	depth += int(float64(maskCount) * baseQualPenalty)
+	depth += float64(maskCount) * baseQualPenalty
 	return depth
 }
 
