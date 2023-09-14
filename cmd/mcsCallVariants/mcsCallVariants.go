@@ -1054,6 +1054,9 @@ func removePositionalOutliers(watsonPiles, crickPiles []sam.Pile, watsonReads, c
 func calcDepth(s sam.Pile) int {
 	var depth int
 	for i := range s.CountF {
+		if i == int(dna.N) {
+			continue
+		}
 		depth += s.CountF[i] + s.CountR[i]
 	}
 	return depth
