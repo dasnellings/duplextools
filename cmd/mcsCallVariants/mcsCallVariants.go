@@ -286,7 +286,7 @@ func callFamily(b bed.Bed, bamReader *sam.BamReader, header sam.Header, faSeeker
 func pilesToVcfs(watsonPiles, crickPiles []sam.Pile, minAf, baseQualPenalty float64, minStrandedDepth, minTotalDepth int, header sam.Header, faSeeker *fasta.Seeker, b bed.Bed, callSingleStrand bool, calledSites []uint32, calledSitesBedChan chan<- bed.Bed, debugOutChan chan<- string) ([]vcf.Vcf, []uint32) {
 	var variants []vcf.Vcf
 	var v vcf.Vcf
-	var keeper bool
+	var keepVariant, keepSite bool
 	var watsonPileIdx, crickPileIdx int
 	calledSites = calledSites[:0] // empty slice
 	if cap(calledSites) < b.ChromEnd-b.ChromStart {
@@ -305,9 +305,11 @@ func pilesToVcfs(watsonPiles, crickPiles []sam.Pile, minAf, baseQualPenalty floa
 			crickPileIdx++
 			continue
 		}
-		v, keeper = callFromPilePair(watsonPiles[watsonPileIdx], crickPiles[crickPileIdx], minAf, baseQualPenalty, minStrandedDepth, minTotalDepth, header, faSeeker, b, callSingleStrand, debugOutChan)
-		calledSites = append(calledSites, watsonPiles[watsonPileIdx].Pos)
-		if keeper {
+		v, keepVariant, keepSite = callFromPilePair(watsonPiles[watsonPileIdx], crickPiles[crickPileIdx], minAf, baseQualPenalty, minStrandedDepth, minTotalDepth, header, faSeeker, b, callSingleStrand, debugOutChan)
+		if keepSite {
+			calledSites = append(calledSites, watsonPiles[watsonPileIdx].Pos)
+		}
+		if keepVariant {
 			variants = append(variants, v)
 		}
 
@@ -326,9 +328,11 @@ func pilesToVcfs(watsonPiles, crickPiles []sam.Pile, minAf, baseQualPenalty floa
 	for watsonPileIdx < len(watsonPiles) {
 		emptyPile.Pos = watsonPiles[watsonPileIdx].Pos
 		emptyPile.RefIdx = watsonPiles[watsonPileIdx].RefIdx
-		v, keeper = callFromPilePair(watsonPiles[watsonPileIdx], emptyPile, minAf, baseQualPenalty, minStrandedDepth, minTotalDepth, header, faSeeker, b, callSingleStrand, debugOutChan)
-		calledSites = append(calledSites, watsonPiles[watsonPileIdx].Pos)
-		if keeper {
+		v, keepVariant, keepSite = callFromPilePair(watsonPiles[watsonPileIdx], emptyPile, minAf, baseQualPenalty, minStrandedDepth, minTotalDepth, header, faSeeker, b, callSingleStrand, debugOutChan)
+		if keepSite {
+			calledSites = append(calledSites, watsonPiles[watsonPileIdx].Pos)
+		}
+		if keepVariant {
 			variants = append(variants, v)
 		}
 		watsonPileIdx++
@@ -336,9 +340,11 @@ func pilesToVcfs(watsonPiles, crickPiles []sam.Pile, minAf, baseQualPenalty floa
 	for crickPileIdx < len(crickPiles) {
 		emptyPile.Pos = crickPiles[crickPileIdx].Pos
 		emptyPile.RefIdx = crickPiles[crickPileIdx].RefIdx
-		v, keeper = callFromPilePair(emptyPile, crickPiles[crickPileIdx], minAf, baseQualPenalty, minStrandedDepth, minTotalDepth, header, faSeeker, b, callSingleStrand, debugOutChan)
-		calledSites = append(calledSites, crickPiles[crickPileIdx].Pos)
-		if keeper {
+		v, keepVariant, keepSite = callFromPilePair(emptyPile, crickPiles[crickPileIdx], minAf, baseQualPenalty, minStrandedDepth, minTotalDepth, header, faSeeker, b, callSingleStrand, debugOutChan)
+		if keepSite {
+			calledSites = append(calledSites, crickPiles[crickPileIdx].Pos)
+		}
+		if keepVariant {
 			variants = append(variants, v)
 		}
 		crickPileIdx++
@@ -347,7 +353,7 @@ func pilesToVcfs(watsonPiles, crickPiles []sam.Pile, minAf, baseQualPenalty floa
 	return variants, calledSites
 }
 
-func callFromPilePair(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, minStrandedDepth, minTotalDepth int, header sam.Header, faSeeker *fasta.Seeker, b bed.Bed, callSingleStrand bool, debugOutChan chan<- string) (vcf.Vcf, bool) {
+func callFromPilePair(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, minStrandedDepth, minTotalDepth int, header sam.Header, faSeeker *fasta.Seeker, b bed.Bed, callSingleStrand bool, debugOutChan chan<- string) (v vcf.Vcf, keepVariant bool, keepSite bool) {
 	var watsonDelLen, crickDelLen int
 	var watsonInsSeq, crickInsSeq, chr string
 	var maxWatsonBase, maxCrickBase dna.Base
@@ -359,6 +365,10 @@ func callFromPilePair(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 
 	watsonDepth := pileDepth(wPile, baseQualPenalty)
 	crickDepth := pileDepth(cPile, baseQualPenalty)
+
+	if watsonDepth < float64(minStrandedDepth) || crickDepth < float64(minStrandedDepth) {
+		return ans, false, false
+	}
 
 	if debugOutChan != nil {
 		debugOutChan <- fmt.Sprintf("watson: %v, crick: %v", wPile, cPile)
@@ -416,7 +426,7 @@ func callFromPilePair(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 		if debugOutChan != nil {
 			debugOutChan <- fmt.Sprintf("variant types do not match, moving on")
 		}
-		return ans, false
+		return ans, false, true
 	}
 
 	// exclude if watson or crick AF is less than threshold.
@@ -424,7 +434,7 @@ func callFromPilePair(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 		if debugOutChan != nil {
 			debugOutChan <- fmt.Sprintf("does not meet af requirements\nwatson: (%d/%f) = %f\ncrick: (%d/%f) = %f", watsonAltAlleleCount, watsonDepth, float64(watsonAltAlleleCount)/float64(watsonDepth), crickAltAlleleCount, crickDepth, float64(crickAltAlleleCount)/float64(crickDepth))
 		}
-		return ans, false
+		return ans, false, true
 	}
 
 	// exclude if below minimum read depth
@@ -432,7 +442,7 @@ func callFromPilePair(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 		if debugOutChan != nil {
 			debugOutChan <- fmt.Sprintf("does not meet minimum read depth, moving on")
 		}
-		return ans, false
+		return ans, false, true
 	}
 
 	// variant-type specific filters and processing
@@ -443,7 +453,7 @@ func callFromPilePair(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 			if debugOutChan != nil {
 				debugOutChan <- fmt.Sprintf("variant bases do not match, moving on\nwatson: %s\ncrick: %s", dna.BaseToString(maxWatsonBase), dna.BaseToString(maxCrickBase))
 			}
-			return ans, false
+			return ans, false, true
 		}
 
 		refBase, err = fasta.SeekByName(faSeeker, chr, int(wPile.Pos-1), int(wPile.Pos))
@@ -454,7 +464,7 @@ func callFromPilePair(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 			if debugOutChan != nil {
 				debugOutChan <- fmt.Sprintf("alt base matches ref")
 			}
-			return ans, false
+			return ans, false, true
 		}
 		ans = snvToVcf(wPile, cPile, chr, refBase[0], maxWatsonBase, b.Name, doubleStranded, false)
 
@@ -463,13 +473,13 @@ func callFromPilePair(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 			if debugOutChan != nil {
 				debugOutChan <- fmt.Sprintf("different insertion lengths")
 			}
-			return ans, false
+			return ans, false, true
 		}
 		if strings.Contains(watsonInsSeq, "N") {
 			if debugOutChan != nil {
 				debugOutChan <- fmt.Sprintf("insertion seq contains Ns")
 			}
-			return ans, false
+			return ans, false, true
 		}
 		ans = insToVcf(wPile, cPile, chr, watsonInsSeq, faSeeker, b.Name, doubleStranded, false)
 
@@ -478,15 +488,15 @@ func callFromPilePair(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 			if debugOutChan != nil {
 				debugOutChan <- fmt.Sprintf("different deletion lengths")
 			}
-			return ans, false
+			return ans, false, true
 		}
 		ans = delToVcf(wPile, cPile, chr, watsonDelLen, faSeeker, b.Name, doubleStranded, false)
 	}
 
-	return ans, true
+	return ans, true, true
 }
 
-func unstrandedCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, minStrandedDepth, minTotalDepth int, header sam.Header, faSeeker *fasta.Seeker, b bed.Bed, debugOutChan chan<- string, mergeDepth float64) (vcf.Vcf, bool) {
+func unstrandedCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, minStrandedDepth, minTotalDepth int, header sam.Header, faSeeker *fasta.Seeker, b bed.Bed, debugOutChan chan<- string, mergeDepth float64) (v vcf.Vcf, keepVariant bool, keepSite bool) {
 	var mergeDelLen int
 	var mergeInsSeq, chr string
 	var maxMergeBase dna.Base
@@ -513,7 +523,7 @@ func unstrandedCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, minSt
 		if debugOutChan != nil {
 			debugOutChan <- fmt.Sprintf("does not meet af requirements\nmerge: (%d/%d) = %f\n", mergeAltAlleleCount, mergeDepth, float64(mergeAltAlleleCount)/float64(mergeDepth))
 		}
-		return ans, false
+		return ans, false, true
 	}
 
 	// exclude if below minimum read depth
@@ -521,7 +531,7 @@ func unstrandedCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, minSt
 		if debugOutChan != nil {
 			debugOutChan <- fmt.Sprintf("does not meet minimum read depth, moving on")
 		}
-		return ans, false
+		return ans, false, true
 	}
 
 	// variant-type specific filters and processing
@@ -536,7 +546,7 @@ func unstrandedCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, minSt
 			if debugOutChan != nil {
 				debugOutChan <- fmt.Sprintf("alt base matches ref")
 			}
-			return ans, false
+			return ans, false, true
 		}
 		ans = snvToVcf(wPile, cPile, chr, refBase[0], maxMergeBase, b.Name, unStranded, false)
 
@@ -547,10 +557,10 @@ func unstrandedCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, minSt
 		ans = delToVcf(wPile, cPile, chr, mergeDelLen, faSeeker, b.Name, unStranded, false)
 	}
 
-	return ans, true
+	return ans, true, true
 }
 
-func singleStrandCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, minStrandedDepth, minTotalDepth int, header sam.Header, faSeeker *fasta.Seeker, b bed.Bed, debugOutChan chan<- string, watsonVarType, crickVarType variantType, maxWatsonBase, maxCrickBase dna.Base, watsonInsSeq, crickInsSeq string, watsonDelLen, crickDelLen, watsonAltAlleleCount, crickAltAlleleCount int, watsonDepth, crickDepth float64) (vcf.Vcf, bool) {
+func singleStrandCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, minStrandedDepth, minTotalDepth int, header sam.Header, faSeeker *fasta.Seeker, b bed.Bed, debugOutChan chan<- string, watsonVarType, crickVarType variantType, maxWatsonBase, maxCrickBase dna.Base, watsonInsSeq, crickInsSeq string, watsonDelLen, crickDelLen, watsonAltAlleleCount, crickAltAlleleCount int, watsonDepth, crickDepth float64) (v vcf.Vcf, keepVariant bool, keepSite bool) {
 	var refBase []dna.Base
 	var err error
 	var ans vcf.Vcf
@@ -561,7 +571,7 @@ func singleStrandCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 		if debugOutChan != nil {
 			debugOutChan <- fmt.Sprintf("does not meet single-stranded af requirements\nwatson: (%d/%d) = %f\ncrick: (%d/%d) = %f", watsonAltAlleleCount, watsonDepth, float64(watsonAltAlleleCount)/float64(watsonDepth), crickAltAlleleCount, crickDepth, float64(crickAltAlleleCount)/float64(crickDepth))
 		}
-		return ans, false
+		return ans, false, true
 	}
 
 	// exclude if below minimum read depth
@@ -569,7 +579,7 @@ func singleStrandCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 		if debugOutChan != nil {
 			debugOutChan <- fmt.Sprintf("does not meet minimum read depth, moving on")
 		}
-		return ans, false
+		return ans, false, true
 	}
 
 	var prefVarType variantType
@@ -600,7 +610,7 @@ func singleStrandCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 			altBase = maxWatsonBase
 			chosenStrand = true
 		} else {
-			return ans, false
+			return ans, false, true
 		}
 		ans = snvToVcf(wPile, cPile, chr, refBase[0], altBase, b.Name, singleStranded, chosenStrand)
 
@@ -617,7 +627,7 @@ func singleStrandCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 			if debugOutChan != nil {
 				debugOutChan <- fmt.Sprintf("insertion seq contains Ns")
 			}
-			return ans, false
+			return ans, false, true
 		}
 		ans = insToVcf(wPile, cPile, chr, prefInsSeq, faSeeker, b.Name, singleStranded, chosenStrand)
 
@@ -633,7 +643,7 @@ func singleStrandCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 		ans = delToVcf(wPile, cPile, chr, prefDelLen, faSeeker, b.Name, singleStranded, chosenStrand)
 	}
 
-	return ans, true
+	return ans, true, true
 }
 
 func sumPiles(a, b sam.Pile) sam.Pile {
