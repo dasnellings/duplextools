@@ -53,10 +53,10 @@ func RunPulseMixtureModel(data []float64, k, pulsePeriod, maxIterations, maxRese
 // To reduce the number of allocations required for repeated use of RunMixtureModel, the input mixture model 'mm' can be reused between calls
 // with no modifications necessaryn
 func runMixtureModel(expectationFunc func(*MixtureModel, int), data []float64, k int, pulsePeriod int, maxIterations, maxResets int, mm *MixtureModel) (converged bool, iterationsRun int) {
+	initMixtureModel(data, k, maxIterations, mm)
 	if len(data) == 0 {
 		return
 	}
-	initMixtureModel(data, k, maxIterations, mm)
 	var resets int
 	var prevLogLikelihood float64
 
