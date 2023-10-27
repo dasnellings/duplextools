@@ -56,6 +56,7 @@ func (i *inputFiles) Set(value string) error {
 func main() {
 	var inputs inputFiles
 	flag.Var(&inputs, "i", "Input BAM file with alignments. Must be sorted and indexed. Can be declared more than once")
+	var inputDir *string = flag.String("inputDir", "", "Directory with BAM files to be used as inputs. Uses all files in the directory ending with \".bam\". Can be used instead of -i.")
 	var ref *string = flag.String("r", "", "Reference genome. Must be the same reference used for generating the BAM file.")
 	var targets *string = flag.String("t", "", "BED file of targeted repeats. The 4th column must be the sequence of one repeat unit (e.g. CA for a CACACACA repeat), or 'RepeatLen'x'RepeatSeq' (e.g. 10xCA).")
 	var output *string = flag.String("o", "stdout", "Output VCF file.")
@@ -85,9 +86,13 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
+	if *inputDir != "" {
+		inputs = getInputsFromDir(*inputDir)
+	}
+
 	if len(inputs) == 0 || *ref == "" {
 		usage()
-		log.Fatalln("ERROR: must input a VCF file with -i")
+		log.Fatalln("ERROR: must input a BAM file with -i")
 	}
 
 	debug = *debugVal
@@ -109,6 +114,18 @@ func main() {
 			log.Fatal("could not write memory profile: ", err)
 		}
 	}
+}
+
+func getInputsFromDir(dir string) []string {
+	var inputs []string
+	files, err := os.ReadDir(dir)
+	exception.PanicOnErr(err)
+	for i := range files {
+		if strings.HasSuffix(files[i].Name(), ".bam") {
+			inputs = append(inputs, files[i].Name())
+		}
+	}
+	return inputs
 }
 
 func genotypeTargetRepeats(inputFiles []string, refFile, targetsFile, outputFile, bamOutPfx, lenOutFile string, targetPadding, minFlankOverlap, minMapQ, minReads int, removeDups bool, alignerThreads int) {
