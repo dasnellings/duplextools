@@ -23,6 +23,7 @@ import (
 	"math"
 	"os"
 	"path"
+	"path/filepath"
 	"runtime"
 	"runtime/pprof"
 	"sort"
@@ -120,9 +121,13 @@ func getInputsFromDir(dir string) []string {
 	var inputs []string
 	files, err := os.ReadDir(dir)
 	exception.PanicOnErr(err)
+	var absPath string
+	workingDir, err := os.Getwd()
+	exception.PanicOnErr(err)
 	for i := range files {
 		if strings.HasSuffix(files[i].Name(), ".bam") {
-			inputs = append(inputs, files[i].Name())
+			absPath = filepath.Join(workingDir, dir, files[i].Name())
+			inputs = append(inputs, absPath)
 		}
 	}
 	return inputs
