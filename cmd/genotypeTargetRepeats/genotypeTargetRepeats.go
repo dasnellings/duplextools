@@ -122,11 +122,9 @@ func getInputsFromDir(dir string) []string {
 	files, err := os.ReadDir(dir)
 	exception.PanicOnErr(err)
 	var absPath string
-	workingDir, err := os.Getwd()
-	exception.PanicOnErr(err)
 	for i := range files {
 		if strings.HasSuffix(files[i].Name(), ".bam") {
-			absPath = filepath.Join(workingDir, dir, files[i].Name())
+			absPath = filepath.Join(dir, files[i].Name())
 			inputs = append(inputs, absPath)
 		}
 	}
