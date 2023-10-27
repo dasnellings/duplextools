@@ -498,7 +498,7 @@ func parseRepeatSeq(s string) ([]dna.Base, int) {
 	}
 	num, err := strconv.Atoi(words[0])
 	exception.PanicOnErr(err)
-	return dna.StringToBases(words[1]), num
+	return dna.StringToBases(strings.Split(words[1], "_")[0]), num
 }
 
 func dedup(reads []*sam.Sam) []*sam.Sam {
