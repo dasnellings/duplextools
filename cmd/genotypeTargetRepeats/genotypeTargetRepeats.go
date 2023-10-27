@@ -301,7 +301,7 @@ func callGenotypes(ref *fasta.Seeker, region bed.Bed, minReads int, enclosingRea
 		ans.Samples[i].FormatData[1] = fmt.Sprintf("%d", len(observedLengths[i]))
 
 		log.Println(mm[i].LogLikelihood)
-		if mm[i].LogLikelihood == math.MaxFloat64 {
+		if mm[i].LogLikelihood == math.MaxFloat64 || mm[i].LogLikelihood == 0 {
 			ans.Samples[i].FormatData[2] = "."
 			ans.Samples[i].FormatData[3] = "."
 			ans.Samples[i].FormatData[4] = "."
