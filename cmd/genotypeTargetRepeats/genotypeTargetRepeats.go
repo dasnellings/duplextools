@@ -314,7 +314,7 @@ func callGenotypes(ref *fasta.Seeker, region bed.Bed, minReads int, enclosingRea
 		}
 		ans.Samples[i].FormatData[5] = fmt.Sprintf("%.1g", mm[i].LogLikelihood)
 
-		fmt.Println(i)
+		log.Println(i)
 		goodnessOfFit0, allele0Reads, minKsLen0 = testPulseFitKS(mm[i], 0, len(repeatUnitLen), buf, readBuf, false)
 		goodnessOfFit1, allele1Reads, minKsLen1 = testPulseFitKS(mm[i], 1, len(repeatUnitLen), buf, readBuf, false)
 		pulseHeuristic0, _, optimalHeuristicLen0 = testPulseFitHeuristic(mm[i], 0, len(repeatUnitLen), false)
