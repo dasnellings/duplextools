@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -38,27 +39,35 @@ func main() {
 
 func duplexMultiomeSplit(input, barcodesFile, outputDir string) {
 	startTime := time.Now()
+	wg := new(sync.WaitGroup)
 	var err error
 	os.Mkdir(outputDir, 0755)
 	records, header := sam.GoReadToChan(input)
 
 	// make outputs writing to buffers in memory
-	barcodeMap := make(map[string][2]*sam.BamWriter)
-	writerMap := make(map[string][2]*bytes.Buffer)
+	chanMap := make(map[string][2]chan<- sam.Sam)
 	barcodes := readBarcodes(barcodesFile)
 	var barcode string
 	for _, barcode = range barcodes {
-		writerMap[barcode] = [2]*bytes.Buffer{new(bytes.Buffer), new(bytes.Buffer)}
-		barcodeMap[barcode] = [2]*sam.BamWriter{sam.NewBamWriter(writerMap[barcode][0], header), sam.NewBamWriter(writerMap[barcode][1], header)}
+		wg.Add(2)
+		chanMap[barcode] = [2]chan<- sam.Sam{
+			newWriter(header, outputDir, strings.TrimSuffix(input, ".bam"), barcode, wg, 1),
+			newWriter(header, outputDir, strings.TrimSuffix(input, ".bam"), barcode, wg, 2),
+		}
 	}
 
 	var found bool
 	var cellBarcode, strandBarcode string
 	var value interface{}
-	var currWriter *sam.BamWriter
+	var currWriter chan<- sam.Sam
 	var recordsProcessed int
 	var unhandledRecords int
 	for r := range records {
+		recordsProcessed++
+		if recordsProcessed%1000000 == 0 {
+			log.Printf("Total Reads Processed: %d\n", recordsProcessed)
+		}
+
 		value, found, err = sam.QueryTag(r, "CB")
 		exception.PanicOnErr(err)
 		if !found {
@@ -79,9 +88,9 @@ func duplexMultiomeSplit(input, barcodesFile, outputDir string) {
 
 		switch strandBarcode {
 		case "AAACGGCG", "CCTACCAT", "GGCGTTTC", "TTGTAAGA":
-			currWriter = barcodeMap[cellBarcode][0]
+			currWriter = chanMap[cellBarcode][0]
 		case "AGGCTACC", "CTAGCTGT", "GCCAACAA", "TATTGGTG":
-			currWriter = barcodeMap[cellBarcode][1]
+			currWriter = chanMap[cellBarcode][1]
 		}
 
 		if currWriter == nil {
@@ -89,23 +98,15 @@ func duplexMultiomeSplit(input, barcodesFile, outputDir string) {
 			continue
 		}
 
-		sam.WriteToBamFileHandle(currWriter, r, 0)
-		recordsProcessed++
-
-		if recordsProcessed%100000 == 0 {
-			log.Printf("Total Reads Processed: %d\n", recordsProcessed)
-			appendBuffersToFile(writerMap, outputDir, strings.TrimSuffix(input, ".bam"))
-		}
+		currWriter <- r
 	}
 
-	for _, writer := range barcodeMap {
-		err = writer[0].Close()
-		exception.PanicOnErr(err)
-		err = writer[1].Close()
-		exception.PanicOnErr(err)
+	for _, c := range chanMap {
+		close(c[0])
+		close(c[1])
 	}
-	appendBuffersToFile(writerMap, outputDir, strings.TrimSuffix(input, ".bam"))
 
+	wg.Wait()
 	elapsedTime := time.Since(startTime)
 	log.Printf("\nProcessed Records: %d\nUnhandled Records: %d\nTime Elapsed: %.1fsec\n", recordsProcessed, unhandledRecords, elapsedTime.Seconds())
 }
@@ -124,24 +125,36 @@ func readBarcodes(file string) []string {
 	return ans
 }
 
-func appendBuffersToFile(writerMap map[string][2]*bytes.Buffer, dir, filename string) {
+func writeBufferToFile(b *bytes.Buffer, dir, filename, barcode string, strand int) {
 	var file *os.File
 	var err error
 	var filepath string
-	var i int
-	for barcode, writers := range writerMap {
-		for i = range writers {
-			if writers[i].Len() == 0 {
-				continue
-			}
-			filepath = path.Join(dir, fmt.Sprintf("%s.%s.strand%d.bam", filename, barcode, i+1))
-			file, err = os.OpenFile(filepath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
-			exception.PanicOnErr(err)
-			_, err = file.Write(writers[i].Bytes())
-			exception.PanicOnErr(err)
-			writers[i].Reset()
-			err = file.Close()
-			exception.PanicOnErr(err)
-		}
+	if b.Len() == 0 {
+		return
 	}
+	filepath = path.Join(dir, fmt.Sprintf("%s.%s.strand%d.bam", filename, barcode, strand))
+	file, err = os.OpenFile(filepath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
+	exception.PanicOnErr(err)
+	_, err = file.Write(b.Bytes())
+	exception.PanicOnErr(err)
+	b.Reset()
+	err = file.Close()
+	exception.PanicOnErr(err)
+}
+
+func newWriter(header sam.Header, dir, filename, barcode string, wg *sync.WaitGroup, strand int) chan<- sam.Sam {
+	in := make(chan sam.Sam, 100)
+	go func(<-chan sam.Sam) {
+		b := new(bytes.Buffer)
+		w := sam.NewBamWriter(b, header)
+		for r := range in {
+			sam.WriteToBamFileHandle(w, r, 0)
+			writeBufferToFile(b, dir, filename, barcode, strand)
+		}
+		err := w.Close()
+		exception.PanicOnErr(err)
+		writeBufferToFile(b, dir, filename, barcode, strand)
+		wg.Done()
+	}(in)
+	return in
 }
