@@ -41,7 +41,10 @@ func duplexMultiomeSplit(input, barcodesFile, outputDir string) {
 	startTime := time.Now()
 	wg := new(sync.WaitGroup)
 	var err error
-	os.Mkdir(outputDir, 0755)
+	err = os.Mkdir(outputDir, 0755)
+	if err != nil {
+		log.Fatalf("ERROR: output directory '%s' already exists.", outputDir)
+	}
 	records, header := sam.GoReadToChan(input)
 
 	// make outputs writing to buffers in memory
