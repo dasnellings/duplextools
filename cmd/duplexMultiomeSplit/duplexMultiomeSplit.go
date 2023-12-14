@@ -19,25 +19,27 @@ func usage() {
 	fmt.Print(
 		"duplexMultiomeSplit - Split duplex multiome BAM file by cell barcode tag.\n" +
 			"Usage:\n" +
-			"annotateReadFamilies [options] -i input.bam -b barcodes.cells\n\n")
+			"annotateReadFamilies [options] -i input.bam -b barcodes.cells -strand1 s1.barcodes -strand2 s2.barcodes\n\n")
 	flag.PrintDefaults()
 }
 
 func main() {
 	input := flag.String("i", "", "Input bam file.")
-	barcodesFile := flag.String("b", "", "Barcodes file.")
+	barcodesFile := flag.String("b", "", "Cell barcodes file.")
+	strand1File := flag.String("strand1", "", "Strand 1 barcodes file. 1 barcode per line.")
+	strand2File := flag.String("strand2", "", "Strand 2 barcodes file. 1 barcode per line.")
 	outputDir := flag.String("outputDir", "barcode_split_bams", "Directory to output split bam files.")
 	flag.Parse()
 
-	if *input == "" || *barcodesFile == "" {
+	if *input == "" || *barcodesFile == "" || *strand1File == "" || *strand2File == "" {
 		usage()
-		log.Fatal("ERROR: Must input a bam file and a barcodes file.")
+		log.Fatal("ERROR: Must input a bam file and 3 barcodes files.")
 	}
 
-	duplexMultiomeSplit(*input, *barcodesFile, *outputDir)
+	duplexMultiomeSplit(*input, *barcodesFile, *outputDir, *strand1File, *strand2File)
 }
 
-func duplexMultiomeSplit(input, barcodesFile, outputDir string) {
+func duplexMultiomeSplit(input, barcodesFile, outputDir, strand1File, strand2File string) {
 	startTime := time.Now()
 	wg := new(sync.WaitGroup)
 	var err error
@@ -54,10 +56,13 @@ func duplexMultiomeSplit(input, barcodesFile, outputDir string) {
 	for _, barcode = range barcodes {
 		wg.Add(2)
 		chanMap[barcode] = [2]chan<- sam.Sam{
-			newWriter(header, outputDir, strings.TrimSuffix(input, ".bam"), barcode, wg, 1),
-			newWriter(header, outputDir, strings.TrimSuffix(input, ".bam"), barcode, wg, 2),
+			newWriter(header, outputDir, path.Base(strings.TrimSuffix(input, ".bam")), barcode, wg, 1),
+			newWriter(header, outputDir, path.Base(strings.TrimSuffix(input, ".bam")), barcode, wg, 2),
 		}
 	}
+
+	strand1Barcodes := getStrandMap(strand1File)
+	strand2Barcodes := getStrandMap(strand2File)
 
 	var found bool
 	var cellBarcode, strandBarcode string
@@ -89,10 +94,10 @@ func duplexMultiomeSplit(input, barcodesFile, outputDir string) {
 		}
 		strandBarcode = value.(string)
 
-		switch strandBarcode {
-		case "AAACGGCG", "CCTACCAT", "GGCGTTTC", "TTGTAAGA":
+		switch {
+		case strand1Barcodes[strandBarcode]:
 			currWriter = chanMap[cellBarcode][0]
-		case "AGGCTACC", "CTAGCTGT", "GCCAACAA", "TATTGGTG":
+		case strand2Barcodes[strandBarcode]:
 			currWriter = chanMap[cellBarcode][1]
 		}
 
@@ -160,4 +165,13 @@ func newWriter(header sam.Header, dir, filename, barcode string, wg *sync.WaitGr
 		wg.Done()
 	}(in)
 	return in
+}
+
+func getStrandMap(file string) map[string]bool {
+	barcodes := readBarcodes(file)
+	m := make(map[string]bool)
+	for i := range barcodes {
+		m[barcodes[i]] = true
+	}
+	return m
 }
