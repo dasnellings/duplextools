@@ -29,7 +29,12 @@ func main() {
 	strand1File := flag.String("strand1", "", "Strand 1 barcodes file. 1 barcode per line.")
 	strand2File := flag.String("strand2", "", "Strand 2 barcodes file. 1 barcode per line.")
 	outputDir := flag.String("outputDir", "barcode_split_bams", "Directory to output split bam files.")
+	version := flag.Bool("v", false, "Print version.")
 	flag.Parse()
+
+	if *version {
+		fmt.Println("duplexMultiomeSplit v1.02")
+	}
 
 	if *input == "" || *barcodesFile == "" || *strand1File == "" || *strand2File == "" {
 		usage()
