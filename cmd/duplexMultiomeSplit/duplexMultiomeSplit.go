@@ -33,7 +33,8 @@ func main() {
 	flag.Parse()
 
 	if *version {
-		fmt.Println("duplexMultiomeSplit v1.02")
+		fmt.Println("duplexMultiomeSplit v1.03")
+		return
 	}
 
 	if *input == "" || *barcodesFile == "" || *strand1File == "" || *strand2File == "" {
@@ -114,6 +115,7 @@ func duplexMultiomeSplit(input, barcodesFile, outputDir, strand1File, strand2Fil
 		}
 
 		currWriter <- r
+		currWriter = nil
 	}
 
 	for _, c := range chanMap {
