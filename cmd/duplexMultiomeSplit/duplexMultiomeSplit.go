@@ -80,6 +80,7 @@ func duplexMultiomeSplit(input, barcodesFile, outputDir, strand1File, strand2Fil
 		exception.PanicOnErr(err)
 		if !found {
 			//log.Panicln("ERROR: cell barcode not found in following record\n", r)
+			cellBarcode = ""
 			unhandledRecords++
 			continue
 		}
@@ -89,6 +90,7 @@ func duplexMultiomeSplit(input, barcodesFile, outputDir, strand1File, strand2Fil
 		exception.PanicOnErr(err)
 		if !found {
 			//log.Panicln("ERROR: strand barcode not found in following record\n", r)
+			strandBarcode = ""
 			unhandledRecords++
 			continue
 		}
