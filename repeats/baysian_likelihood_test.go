@@ -38,6 +38,7 @@ type data struct {
 	baseGenotype  []int
 	bestGenotypes [][]int
 	ksValues      [][]float64
+	pValues       [][]float64
 }
 
 func TestBestSingleGenotype(t *testing.T) {
@@ -46,31 +47,74 @@ func TestBestSingleGenotype(t *testing.T) {
 	stutterProb := 0.1
 	stutterMismatchProb := 1e-5
 	minReadsPerAllele := 50
+	maxAlleleImbalance := 0.8
+	minMutationD := 0.5
+	minFractionOfCellsWithBaseGenotype := 0.5
+	bootstrapIterations := 10000
+	bootstrapReadCounts := 100
+
 	var d data
-	var i int
+	var i, j int
+	var recordNum, cellsWithBaseGenotype, genotypedCells int
 	c := goParseVcfToReadVect(testFile)
 	for v := range c {
-		if v.v.Chr != "chr12" || v.v.Pos != 10591800 {
+		recordNum++
+		if recordNum%10 == 0 {
+			log.Println(recordNum)
+		}
+		//if recordNum != 168 {
+		//if recordNum != 194 {
+		//	continue
+		//}
+
+		repeatUnitLen = getRepeatUnitSize(v.v)
+		if repeatUnitLen < 2 {
 			continue
 		}
-		d = getData(v, repeatUnitLen, lambda, stutterProb, stutterMismatchProb, minReadsPerAllele)
-		for i := range v.names {
-			fmt.Printf("Sample: %s\tbestGenotype: %v\tAllele Size: %d\tReads: %d\tD: %.2f\n", path.Base(v.names[i]), d.bestGenotypes[i], d.baseGenotype[0], len(d.splitReads[i][0]), d.ksValues[i][0])
-			fmt.Printf("Sample: %s\tbestGenotype: %v\tAllele Size: %d\tReads: %d\tD: %.2f\n", path.Base(v.names[i]), d.bestGenotypes[i], d.baseGenotype[1], len(d.splitReads[i][1]), d.ksValues[i][1])
+		fmt.Println(v.v.Chr, v.v.Pos, v.v.Id)
+		d = getData(v, repeatUnitLen, lambda, stutterProb, stutterMismatchProb, minReadsPerAllele, maxAlleleImbalance, bootstrapIterations, bootstrapReadCounts)
+
+		//for i := range v.names {
+		//	fmt.Printf("Sample: %s\tbestGenotype: %v\tAllele Size: %d\tReads: %d\tD: %.2f\n", path.Base(v.names[i]), d.bestGenotypes[i], d.baseGenotype[0], len(d.splitReads[i][0]), d.ksValues[i][0])
+		//	fmt.Printf("Sample: %s\tbestGenotype: %v\tAllele Size: %d\tReads: %d\tD: %.2f\n", path.Base(v.names[i]), d.bestGenotypes[i], d.baseGenotype[1], len(d.splitReads[i][1]), d.ksValues[i][1])
+		//}
+
+		if d.baseGenotype[1]-d.baseGenotype[0] <= repeatUnitLen {
+			continue
+		}
+
+		cellsWithBaseGenotype = 0
+		genotypedCells = 0
+		for i = range v.names {
+			if len(d.bestGenotypes[i]) != 0 {
+				genotypedCells++
+			}
+			if genotypesMatch(d.bestGenotypes[i], d.baseGenotype) {
+				cellsWithBaseGenotype++
+			}
+		}
+		if float64(cellsWithBaseGenotype)/float64(genotypedCells) < minFractionOfCellsWithBaseGenotype {
+			continue
 		}
 
 		for i = range v.names {
 			if genotypesMatch(d.bestGenotypes[i], d.baseGenotype) {
 				continue
 			}
+			for j = range d.ksValues[i] {
+				if d.ksValues[i][j] < minMutationD {
+					continue
+				}
+				fmt.Printf("Variant: %d\tSample: %s\tbestGenotype: %v\tbaseGenotype: %v\tAllele Size: %d\tReads: %d\tD: %.2f\tP: %.2g\n", recordNum, path.Base(v.names[i]), d.bestGenotypes[i], d.baseGenotype, d.baseGenotype[j], len(d.splitReads[i][j]), d.ksValues[i][j], d.pValues[i][j])
+			}
 		}
 	}
 }
 
-func getData(r readVect, repeatUnitLen int, lambda, stutterProb, stutterMismatchProb float64, minReadsPerAllele int) data {
+func getData(r readVect, repeatUnitLen int, lambda, stutterProb, stutterMismatchProb float64, minReadsPerAllele int, maxAlleleImbalance float64, bootstrapIterations, bootstrapReadCounts int) data {
 	var ans data
 	ans.bestGenotypes, ans.baseGenotype, _ = BestSharedGenotype(r.reads, repeatUnitLen, lambda, stutterProb, stutterMismatchProb)
-	ans.splitReads, ans.ksValues = TestGenotypeFit(r.reads, ans.baseGenotype, repeatUnitLen, lambda, stutterProb, stutterMismatchProb, minReadsPerAllele)
+	ans.splitReads, ans.ksValues, ans.pValues = TestGenotypeFit(r.reads, ans.bestGenotypes, ans.baseGenotype, repeatUnitLen, lambda, stutterProb, stutterMismatchProb, minReadsPerAllele, maxAlleleImbalance, bootstrapIterations, bootstrapReadCounts)
 	return ans
 }
 
@@ -155,4 +199,12 @@ func getReadLengthsIndex(format []string) int {
 func simulateData() {
 	//p := distuv.Poisson{Lambda: 0.2}
 
+}
+
+func getRepeatUnitSize(v vcf.Vcf) int {
+	words := strings.Split(v.Id, "x")
+	if len(words) != 2 {
+		return 0
+	}
+	return len(words[1])
 }

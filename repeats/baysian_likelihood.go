@@ -1,6 +1,7 @@
 package repeats
 
 import (
+	"github.com/vertgenlab/gonomics/numbers"
 	"gonum.org/v1/gonum/stat"
 	"gonum.org/v1/gonum/stat/distuv"
 	"math"
@@ -8,20 +9,62 @@ import (
 )
 
 // TestGenotypeFit splits sampleReads by most probable allele of origin (of the alleles in the baseGenotype slice). The output splitReads is organized as splitReads[i][j][k] where i is the sample index, j is the genotype index, and k is the read index.
-// The output ksValues contains the D statistic of the kolmogorov-smirnov test organized as ksValues[i][j] where i is the sample index, and j is the genotype index.
-func TestGenotypeFit(sampleReads [][]int, baseGenotype []int, repeatUnitLength int, poissonLambda, stutterProb, stutterMismatchProb float64, minReadsPerAllele int) (splitReads [][][]int, ksValues [][]float64) {
+// The output ksValues contains the D statistic of the kolmogorov-smirnov test organized as ksValues[i][j] where i is the sample index, and j is the genotype index. P values are calculated by taking the reads from samples with bestGenoytpe matching
+// the baseGenotype, then bootstrapping the D statistic.
+func TestGenotypeFit(sampleReads [][]int, bestGenotypes [][]int, baseGenotype []int, repeatUnitLength int, poissonLambda, stutterProb, stutterMismatchProb float64, minReadsPerAllele int, maxAlleleImbalance float64, bootstrapIterations, bootstrapReadCount int) (splitReads [][][]int, ksValues [][]float64, pValues [][]float64) {
 	ksValues = make([][]float64, len(sampleReads))
 	splitReads = make([][][]int, len(sampleReads))
+	baseGenotypeKsReadsAndWeights := make([][][]float64, len(baseGenotype))
 	var i, j int
+	for j = range baseGenotype {
+		baseGenotypeKsReadsAndWeights[j] = getKsWeights(baseGenotype[j], repeatUnitLength, poissonLambda, stutterProb, stutterMismatchProb)
+	}
 	for i = range sampleReads {
 		splitReads[i] = splitReadsByAllele(sampleReads[i], baseGenotype, repeatUnitLength, poissonLambda, stutterProb, stutterMismatchProb)
 		ksValues[i] = make([]float64, len(baseGenotype))
 		for j = range baseGenotype {
-			if len(splitReads[i][j]) < minReadsPerAllele {
+			if len(splitReads[i][j]) < minReadsPerAllele || failsAlleleImbalance(splitReads[i], maxAlleleImbalance) {
 				ksValues[i][j] = 0
 			} else {
-				ksValues[i][j] = ksTest(splitReads[i][j], baseGenotype[j], repeatUnitLength, poissonLambda, stutterProb, stutterMismatchProb)
+				ksValues[i][j] = ksTest(splitReads[i][j], baseGenotypeKsReadsAndWeights[j])
 			}
+		}
+	}
+
+	// BOOTSTRAPPING
+	var samplesMatchingBaseGenotype []int
+	for i = range bestGenotypes {
+		if equalGenotypes(bestGenotypes[i], baseGenotype) {
+			samplesMatchingBaseGenotype = append(samplesMatchingBaseGenotype, i)
+		}
+	}
+	bootstrapReads := make([]int, bootstrapReadCount)
+	bootstrapDvalues := make([][]float64, len(baseGenotype))
+	for i = range bootstrapDvalues {
+		bootstrapDvalues[i] = make([]float64, bootstrapIterations)
+	}
+	var sampleIdx, alleleIdx, readIdx int
+	for i = 0; i < bootstrapIterations; i++ {
+		for alleleIdx = 0; alleleIdx < len(baseGenotype); alleleIdx++ {
+			for j = 0; j < bootstrapReadCount; j++ {
+				sampleIdx = samplesMatchingBaseGenotype[numbers.RandIntInRange(0, len(samplesMatchingBaseGenotype))]
+				readIdx = numbers.RandIntInRange(0, len(splitReads[sampleIdx][alleleIdx]))
+				bootstrapReads[j] = sampleReads[sampleIdx][readIdx]
+			}
+			sort.Sort(sort.IntSlice(bootstrapReads))
+			bootstrapDvalues[alleleIdx][i] = ksTest(bootstrapReads, baseGenotypeKsReadsAndWeights[alleleIdx])
+		}
+	}
+	for i = range bootstrapDvalues {
+		sort.Sort(sort.Float64Slice(bootstrapDvalues[i]))
+	}
+
+	// USE BOOTSTRAPPING TO GET P VALUES
+	pValues = make([][]float64, len(sampleReads))
+	for i = range pValues {
+		pValues[i] = make([]float64, len(baseGenotype))
+		for j = range pValues[i] {
+			pValues[i][j] = getPvalue(ksValues[i][j], bootstrapDvalues[j])
 		}
 	}
 	return
@@ -152,36 +195,33 @@ func permute(s []int) [][]int {
 }
 
 func splitReadsByAllele(reads []int, genotype []int, repeatUnitLength int, poissonLambda, stutterProb, stutterMismatchProb float64) [][]int {
-	//cumLik := make([]float64, len(genotype))
 	ans := make([][]int, len(genotype))
 	var i, j int
-	//var sum, r, curr float64
 	var curr, maxLik float64
-	var maxGenotype int
+	var assignedGenotype int
+	var tiedGenotypes []int
 	var prevRead int
 	for i = range reads {
 		if reads[i] != prevRead {
 			//sum = 0
 			maxLik = math.Inf(-1)
+			tiedGenotypes = tiedGenotypes[:0]
 			for j = range genotype {
 				curr = likelihoodPerAllele(reads[i], genotype[j], repeatUnitLength, poissonLambda, stutterProb, stutterMismatchProb)
 				if curr > maxLik {
 					maxLik = curr
-					maxGenotype = j
+					tiedGenotypes = tiedGenotypes[:0]
+					tiedGenotypes = append(tiedGenotypes, j)
+					continue
 				}
-				//cumLik[j] = sum + curr
-				//sum += curr
+				if curr == maxLik {
+					tiedGenotypes = append(tiedGenotypes, j)
+				}
 			}
 		}
-		//r = rand.Float64()
-		//for j = range genotype {
-		//	if r <= cumLik[j]/sum {
-		//		ans[j] = append(ans[j], reads[i])
-		//		break
-		//	}
-		//}
 		prevRead = reads[i]
-		ans[maxGenotype] = append(ans[maxGenotype], reads[i])
+		assignedGenotype = tiedGenotypes[numbers.RandIntInRange(0, len(tiedGenotypes))]
+		ans[assignedGenotype] = append(ans[assignedGenotype], reads[i])
 	}
 	return ans
 }
@@ -228,13 +268,11 @@ func equalGenotypes(a, b []int) bool {
 	return true
 }
 
-func ksTest(reads []int, alleleSize int, repeatUnitLength int, poissonLambda, stutterProb, stutterMismatchProb float64) float64 {
-	alleleReadsAndWeights := getKsWeights(alleleSize, repeatUnitLength, poissonLambda, stutterProb, stutterMismatchProb)
+func ksTest(reads []int, alleleReadsAndWeights [][]float64) float64 {
 	var D float64
 	if len(reads) > 1 {
 		D = stat.KolmogorovSmirnov(intsToFloats(reads), nil, alleleReadsAndWeights[0], alleleReadsAndWeights[1])
 	}
-
 	return D
 }
 
@@ -270,4 +308,36 @@ func genotypesMatch(a, b []int) bool {
 		}
 	}
 	return true
+}
+
+func failsAlleleImbalance(genotypeReads [][]int, maxAlleleImbalance float64) bool {
+	var min, max, curr float64
+	min = 1
+	var sum int
+	for i := range genotypeReads {
+		sum += len(genotypeReads[i])
+	}
+	for i := range genotypeReads {
+		curr = float64(len(genotypeReads[i])) / float64(sum)
+		if curr < min {
+			min = curr
+		}
+		if curr > max {
+			max = curr
+		}
+	}
+	if max > maxAlleleImbalance || min < 1-maxAlleleImbalance {
+		return true
+	}
+	return false
+}
+
+func getPvalue(value float64, bootstrapValues []float64) float64 {
+	var idx int
+	for idx = range bootstrapValues {
+		if value <= bootstrapValues[idx] {
+			break
+		}
+	}
+	return float64(len(bootstrapValues)-idx) / float64(len(bootstrapValues))
 }
