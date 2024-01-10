@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/vertgenlab/gonomics/exception"
 	"github.com/vertgenlab/gonomics/vcf"
+	"gonum.org/v1/gonum/stat"
 	"log"
 	"path"
 	"strconv"
@@ -24,7 +25,8 @@ import (
 //	fmt.Println(unique(s))
 //}
 
-var testFile string = "/Users/danielsnellings/Important/Lab/Walsh/scSTR_genotyping/UMD1255_208_cells/data/UMD1255.vcf.gz"
+// var testFile string = "/Users/danielsnellings/Important/Lab/Walsh/scSTR_genotyping/UMD1255_208_cells/data/UMD1255.vcf.gz"
+var testFile string = "/Users/danielsnellings/Important/Lab/Walsh/scSTR_genotyping/UMD1255_208_cells/data/UMD1255_filtered_samples.vcf.gz"
 var testArr []int = []int{12, 14, 14, 14, 14, 16, 16, 16, 16, 17, 17, 17, 17, 17, 17, 17, 17, 17, 18, 18, 18, 18, 18, 18, 18, 18, 19, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 22, 22, 23, 24, 24, 24, 24, 26, 26, 26, 26, 26, 26, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 28, 29, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 31, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32}
 
 type readVect struct {
@@ -33,7 +35,9 @@ type readVect struct {
 	reads [][]int
 }
 
-type data struct {
+type Data struct {
+	v             vcf.Vcf
+	names         []string
 	splitReads    [][][]int
 	baseGenotype  []int
 	bestGenotypes [][]int
@@ -49,17 +53,18 @@ func TestBestSingleGenotype(t *testing.T) {
 	minReadsPerAllele := 50
 	maxAlleleImbalance := 0.8
 	minMutationD := 0.5
+	maxMutationP := 0.05
 	minFractionOfCellsWithBaseGenotype := 0.5
 	bootstrapIterations := 10000
 	bootstrapReadCounts := 100
 
-	var d data
+	var d Data
 	var i, j int
 	var recordNum, cellsWithBaseGenotype, genotypedCells int
 	c := goParseVcfToReadVect(testFile)
 	for v := range c {
 		recordNum++
-		if recordNum%10 == 0 {
+		if recordNum%50 == 0 {
 			log.Println(recordNum)
 		}
 		//if recordNum != 168 {
@@ -71,7 +76,7 @@ func TestBestSingleGenotype(t *testing.T) {
 		if repeatUnitLen < 2 {
 			continue
 		}
-		fmt.Println(v.v.Chr, v.v.Pos, v.v.Id)
+		//fmt.Println(v.v.Chr, v.v.Pos, v.v.Id)
 		d = getData(v, repeatUnitLen, lambda, stutterProb, stutterMismatchProb, minReadsPerAllele, maxAlleleImbalance, bootstrapIterations, bootstrapReadCounts)
 
 		//for i := range v.names {
@@ -79,7 +84,7 @@ func TestBestSingleGenotype(t *testing.T) {
 		//	fmt.Printf("Sample: %s\tbestGenotype: %v\tAllele Size: %d\tReads: %d\tD: %.2f\n", path.Base(v.names[i]), d.bestGenotypes[i], d.baseGenotype[1], len(d.splitReads[i][1]), d.ksValues[i][1])
 		//}
 
-		if d.baseGenotype[1]-d.baseGenotype[0] <= repeatUnitLen {
+		if len(d.baseGenotype) < 2 || d.baseGenotype[1]-d.baseGenotype[0] <= repeatUnitLen {
 			continue
 		}
 
@@ -105,14 +110,22 @@ func TestBestSingleGenotype(t *testing.T) {
 				if d.ksValues[i][j] < minMutationD {
 					continue
 				}
-				fmt.Printf("Variant: %d\tSample: %s\tbestGenotype: %v\tbaseGenotype: %v\tAllele Size: %d\tReads: %d\tD: %.2f\tP: %.2g\n", recordNum, path.Base(v.names[i]), d.bestGenotypes[i], d.baseGenotype, d.baseGenotype[j], len(d.splitReads[i][j]), d.ksValues[i][j], d.pValues[i][j])
+				if d.pValues[i][j] > maxMutationP {
+					continue
+				}
+				fmt.Printf("Variant: %d\tSample: %s\tbestGenotype: %v\tbaseGenotype: %v\tAllele Size: %d\tReads: %d\tD: %.2f\tP: %.2g\tStdev: %.2f\n", recordNum, path.Base(v.names[i]), d.bestGenotypes[i], d.baseGenotype, d.baseGenotype[j], len(d.splitReads[i][j]), d.ksValues[i][j], d.pValues[i][j], stat.StdDev(intsToFloats(d.splitReads[i][j]), nil))
 			}
+		}
+		if recordNum == 168 {
+			PlotData(d)
 		}
 	}
 }
 
-func getData(r readVect, repeatUnitLen int, lambda, stutterProb, stutterMismatchProb float64, minReadsPerAllele int, maxAlleleImbalance float64, bootstrapIterations, bootstrapReadCounts int) data {
-	var ans data
+func getData(r readVect, repeatUnitLen int, lambda, stutterProb, stutterMismatchProb float64, minReadsPerAllele int, maxAlleleImbalance float64, bootstrapIterations, bootstrapReadCounts int) Data {
+	var ans Data
+	ans.v = r.v
+	ans.names = r.names
 	ans.bestGenotypes, ans.baseGenotype, _ = BestSharedGenotype(r.reads, repeatUnitLen, lambda, stutterProb, stutterMismatchProb)
 	ans.splitReads, ans.ksValues, ans.pValues = TestGenotypeFit(r.reads, ans.bestGenotypes, ans.baseGenotype, repeatUnitLen, lambda, stutterProb, stutterMismatchProb, minReadsPerAllele, maxAlleleImbalance, bootstrapIterations, bootstrapReadCounts)
 	return ans
@@ -126,7 +139,6 @@ func goParseVcfToReadVect(file string) <-chan readVect {
 
 func parseVcfToReadVect(file string, out chan<- readVect) {
 	records, header := vcf.GoReadToChan(file)
-
 	for v := range records {
 		out <- parseVcf(v, header)
 	}
@@ -138,7 +150,7 @@ func parseVcf(v vcf.Vcf, header vcf.Header) readVect {
 	ans.v = v
 	ans.names = make([]string, len(header.Samples))
 	for key, val := range header.Samples {
-		ans.names[val] = key
+		ans.names[val] = path.Base(key)
 	}
 	ans.reads = make([][]int, len(header.Samples))
 
@@ -208,3 +220,31 @@ func getRepeatUnitSize(v vcf.Vcf) int {
 	}
 	return len(words[1])
 }
+
+/*
+type readVect struct {
+	v     vcf.Vcf
+	names []string
+	reads [][]int
+}
+
+type data struct {
+	splitReads    [][][]int
+	baseGenotype  []int
+	bestGenotypes [][]int
+	ksValues      [][]float64
+	pValues       [][]float64
+}
+*/
+
+//func fileHeader(names []string) string {
+//
+//}
+//
+//func toFile(out io.Writer, d Data, r readVect) {
+//	var line string
+//	line += fmt.Sprintf("%s\t%d\t%s", r.v.Chr, r.v.Pos, r.v.Id)
+//	for i := range r.names {
+//
+//	}
+//}
