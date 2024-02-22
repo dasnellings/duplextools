@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/dasnellings/duplexTools/barcode"
 	"github.com/dasnellings/duplexTools/fai"
-	"github.com/pkg/profile"
 	"github.com/vertgenlab/gonomics/bed"
 	"github.com/vertgenlab/gonomics/cigar"
 	"github.com/vertgenlab/gonomics/dna"
@@ -19,6 +18,9 @@ import (
 	"golang.org/x/exp/slices"
 	"io"
 	"log"
+	"os"
+	"runtime"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -50,8 +52,8 @@ func (i *inputFiles) Set(value string) error {
 
 func main() {
 	var excludeBeds inputFiles
-	cpuprofile := flag.Bool("cpuprofile", false, "write cpu profile")
-	memprofile := flag.Bool("memprofile", false, "write memory profile")
+	cpuprofile := flag.String("cpuprofile", "", "write cpu profile")
+	memprofile := flag.String("memprofile", "", "write memory profile")
 	input := flag.String("i", "", "Input bam file. Must be indexed.")
 	output := flag.String("o", "stdout", "Output VCF file.")
 	bedFile := flag.String("b", "", "Input bed file with coordinates of read families, read family ID, and read counts for watson and crick strands. Generated with -bed option in annotateReadFamilies.")
@@ -76,15 +78,16 @@ func main() {
 	debugOut := flag.String("debugLog", "", "Print debug logs to file. File may be large. Must be run with threads == 1 for coherent output. ")
 	flag.Parse()
 
-	if *memprofile && *cpuprofile {
-		usage()
-		log.Fatal("ERROR: -memprofile and -cpuprofile are mutually exclusive.")
-	}
-	if *memprofile {
-		defer profile.Start(profile.MemProfile).Stop()
-	}
-	if *cpuprofile {
-		defer profile.Start(profile.CPUProfile).Stop()
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			log.Fatal("could not create CPU profile: ", err)
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatal("could not start CPU profile: ", err)
+		}
+		defer pprof.StopCPUProfile()
 	}
 
 	if len(excludeBeds) == 0 {
@@ -105,6 +108,18 @@ func main() {
 	}
 
 	mcsCallVariants(*input, *output, *ref, *bedFile, excludeBeds, uint8(*minMapQ), *totalDepth, *strandedDepth, *allowSuppAln, *minAf, *minBaseQuality, *minContigSize, *minReadFamilyLength, *baseQualPenalty, *maxSoftClipFraction, *endPad, *maxOverlappingFamilies, *countOverlappingPairs, *callSingleStrand, *debugLevel, *threads, *debugOut)
+
+	if *memprofile != "" {
+		f, err := os.Create(*memprofile)
+		if err != nil {
+			log.Fatal("could not create memory profile: ", err)
+		}
+		defer f.Close() // error handling omitted for example
+		runtime.GC()    // get up-to-date statistics
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			log.Fatal("could not write memory profile: ", err)
+		}
+	}
 }
 
 func mcsCallVariants(input, output, ref, bedFile string, excludeBeds []string, minMapQ uint8, minTotalDepth, minStrandedDepth int, allowSuppAln bool, minAf float64, minBaseQuality, minContigSize, minReadFamilyLength int, baseQualPenalty, maxSoftClipFraction float64, endPad, maxOverlappingFamilies int, countOverlappingPairs, callSingleStrand bool, debugLevel, threads int, debugOut string) {
