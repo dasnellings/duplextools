@@ -135,6 +135,7 @@ func extractIdtDuplex(input string, output io.Writer, sampleSheet string) {
 	var numReads, numSuccess int
 	var tmpSeq []dna.Base = make([]dna.Base, 0, 100)
 	var i7ThreePrimeFlank, i7FivePrimeFlank, i5ThreePrimeFlank, i5FivePrimeFlank string
+	var ok bool
 	for b := range bamChan {
 		numReads++
 		stringSeq = dna.BasesToString(b.Seq)
@@ -173,8 +174,10 @@ func extractIdtDuplex(input string, output io.Writer, sampleSheet string) {
 		}
 
 		consensusSampleIdx = consensus(i7Idx+"-"+i5Idx, sampleIndexes)
-		sample = sampleIndexes[consensusSampleIdx]
-		if _, ok := readsPerSample[sample]; ok {
+		if sample, ok = sampleIndexes[consensusSampleIdx]; !ok {
+			continue
+		}
+		if _, ok = readsPerSample[sample]; ok {
 			readsPerSample[sample]++
 		}
 
