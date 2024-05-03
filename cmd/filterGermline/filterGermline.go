@@ -65,9 +65,11 @@ func handleInputs(input, output, genomicBam, genomicVcf, snpVcf string, minCover
 
 	var excludeIntervals []interval.Interval
 	var padding int
-	for v := range gVcfChan {
-		padding = numbers.Max(len(v.Ref), len(v.Alt[0]))
-		excludeIntervals = append(excludeIntervals, bed.Bed{Chrom: v.Chr, ChromStart: v.Pos - padding, ChromEnd: v.Pos + padding, FieldsInitialized: 3})
+	if genomicVcf != "" {
+		for v := range gVcfChan {
+			padding = numbers.Max(len(v.Ref), len(v.Alt[0]))
+			excludeIntervals = append(excludeIntervals, bed.Bed{Chrom: v.Chr, ChromStart: v.Pos - padding, ChromEnd: v.Pos + padding, FieldsInitialized: 3})
+		}
 	}
 
 	if snpVcf != "" {
