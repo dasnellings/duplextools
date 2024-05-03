@@ -37,9 +37,13 @@ func main() {
 	output := flag.String("o", "stdout", "Output VCF file.")
 	flag.Parse()
 
-	if *input == "" || *genomicBam == "" || *genomicVcf == "" {
+	if *genomicVcf == "" {
+		log.Println("WARNING: use of -g is STRONGLY RECOMMENDED if you are analyzing indels. It is useful, but not critical for analysing SNVs.")
+	}
+
+	if *input == "" || *genomicBam == "" {
 		usage()
-		log.Fatalln("ERROR: must have inputs for -i, -b, and -g")
+		log.Fatalln("ERROR: must have inputs for -i, and -b")
 	}
 
 	handleInputs(*input, *output, *genomicBam, *genomicVcf, *snpVcf, *minCoverage, *maxReadFrac, *maxReads, *minBaseQuality)
@@ -53,7 +57,11 @@ func handleInputs(input, output, genomicBam, genomicVcf, snpVcf string, minCover
 	//ref := fasta.NewSeeker(reference, "")
 	gBam, gBamHeader := sam.OpenBam(genomicBam)
 	gBai := sam.ReadBai(genomicBam + ".bai")
-	gVcfChan, _ := vcf.GoReadToChan(genomicVcf)
+
+	var gVcfChan <-chan vcf.Vcf
+	if genomicVcf != "" {
+		gVcfChan, _ = vcf.GoReadToChan(genomicVcf)
+	}
 
 	var excludeIntervals []interval.Interval
 	var padding int
@@ -70,7 +78,10 @@ func handleInputs(input, output, genomicBam, genomicVcf, snpVcf string, minCover
 		}
 	}
 
-	tree := interval.BuildTree(excludeIntervals)
+	var tree map[string]*interval.IntervalNode
+	if genomicVcf != "" {
+		tree = interval.BuildTree(excludeIntervals)
+	}
 
 	filterGermline(inChan, out, gBam, gBamHeader, gBai, tree, minCoverage, maxReadFrac, maxReads, minBaseQuality)
 
@@ -102,7 +113,7 @@ func filterGermline(inChan <-chan vcf.Vcf, out *fileio.EasyWriter, gBam *sam.Bam
 			prevChr = v.Chr
 		}
 
-		if len(interval.Query(excludeTree, v, "any")) > 0 {
+		if excludeTree != nil && len(interval.Query(excludeTree, v, "any")) > 0 {
 			continue
 		}
 
