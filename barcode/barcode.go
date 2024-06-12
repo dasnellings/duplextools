@@ -114,10 +114,21 @@ func Extract(seq []dna.Base) string {
 	s := dna.BasesToString(seq)
 	idx := strings.Index(s, McsSharedSequence)
 	if idx == -1 {
-		return "*"
+		return attemptBarcodeRescue(s)
 	}
 	bc := s[:idx]
 	return Consensus(bc)
+}
+
+func attemptBarcodeRescue(s string) string {
+	var idx int
+	for barcode := range Barcodes {
+		idx = strings.Index(s, barcode)
+		if idx == 0 {
+			return barcode
+		}
+	}
+	return "*"
 }
 
 // Consensus returns the matching MCS barcode. When an exact match is not found,
