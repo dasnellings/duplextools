@@ -12,7 +12,7 @@ import (
 
 func extractUsage(extractFlags *flag.FlagSet) {
 	fmt.Print(
-		"extract - Process raw FASTQ files to an unmapped BAM with barcode tags.\n\n" +
+		"extract - Process raw FASTQ files to an unmapped BAM with barcode tags\n\n" +
 			"Usage:\n" +
 			"  duplextools extract [options] -1 r1.fq.gz -2 r2.fq.gz > output.bam\n\n" +
 			"Options:\n")
@@ -34,8 +34,7 @@ func runExtract(args []string) {
 
 	if *r1 == "" || *r2 == "" {
 		extractFlags.Usage()
-		fmt.Println("\nERROR: must have inputs for -1 and -2")
-		return
+		errExit("\nERROR: must have inputs for -1 and -2")
 	}
 
 	extract(*r1, *r2, *outfile, *missingBcFile)

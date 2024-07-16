@@ -15,7 +15,7 @@ import (
 
 func pairUsage(pairFlags *flag.FlagSet) {
 	fmt.Print(
-		"pair - identify read families by duplex barcodes and start/end site and record family in RF tag for each read.\n\n" +
+		"pair - identify read families by duplex barcodes and start/end site and record family in RF tag for each read\n\n" +
 			"Usage:\n" +
 			"  duplextools pair [options] -i input.bam > output.bam\n\n" +
 			"Options:\n")
@@ -40,8 +40,7 @@ func runPair(args []string) {
 
 	if *input == "" {
 		pairFlags.Usage()
-		fmt.Println("\nERROR: must input a coordinate sorted bam file with -i")
-		return
+		errExit("\nERROR: must input a coordinate sorted bam file with -i")
 	}
 
 	pair(*input, *output, *tolerance, *strict, *strictPosMatching, *bed, uint8(*minMapQ))

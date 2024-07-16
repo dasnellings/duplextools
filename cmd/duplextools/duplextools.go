@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
 	"strings"
 	"text/tabwriter"
 )
@@ -19,11 +20,11 @@ type subcommand struct {
 // SubCommands contains all valid subcommands.
 // New subcommands can be added to duplextools by adding a new entry to this array.
 var SubCommands = []*subcommand{
-	{"extract", runExtract, "extract strand barcodes from fastq"},
-	{"pair", runPair, "annotate reads with computed read family"},
-	{"call", runCall, "call variants from duplex read families"},
-	{"filter", runFilter, "remove likely constitutional variants from callset"},
-	{"burden", runBurden, "calculate adjusted genome-wide mutation burden"},
+	{"extract", runExtract, "extract strand barcodes from fastq"},               // formerly: mcsFqToBam
+	{"pair", runPair, "annotate reads with computed read family"},               // formerly: annotateReadFamilies
+	{"call", runCall, "call variants from duplex read families"},                // formerly: mcsCallVariants
+	{"filter", runFilter, "remove likely constitutional variants from callset"}, // formerly: filterGermline
+	{"burden", runBurden, "calculate adjusted genome-wide mutation burden"},     // formerly: mcsBurdenCorrection
 }
 
 func usage() {
@@ -68,4 +69,9 @@ func main() {
 
 	// if command successfully found, pass in remaining arguments and execute
 	command(flag.Args()[1:])
+}
+
+func errExit(err string) {
+	fmt.Fprintln(os.Stderr, err)
+	os.Exit(1)
 }
