@@ -14,7 +14,7 @@ func extractUsage(extractFlags *flag.FlagSet) {
 	fmt.Print(
 		"extract - Process raw FASTQ files to an unmapped BAM with barcode tags.\n\n" +
 			"Usage:\n" +
-			"  duplextools extract [options] -1 r1.fq.gz -2 r2.fq.gz\n\n" +
+			"  duplextools extract [options] -1 r1.fq.gz -2 r2.fq.gz > output.bam\n\n" +
 			"Options:\n")
 	extractFlags.PrintDefaults()
 }
@@ -27,6 +27,7 @@ func runExtract(args []string) {
 	r2 := extractFlags.String("2", "", "FASTQ file containing R2 reads. May be gzipped.")
 	outfile := extractFlags.String("o", "stdout", "Output BAM file.")
 	missingBcFile := extractFlags.String("missing", "", "Output BAM file for records with missing barcodes")
+
 	err = extractFlags.Parse(args)
 	exception.PanicOnErr(err)
 	extractFlags.Usage = func() { extractUsage(extractFlags) }
