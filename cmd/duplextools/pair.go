@@ -1,5 +1,5 @@
 package main
 
-func runPair() {
+func runPair(args []string) {
 
 }

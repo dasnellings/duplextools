@@ -1,5 +1,5 @@
 package main
 
-func runBurden() {
+func runBurden(args []string) {
 
 }

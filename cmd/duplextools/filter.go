@@ -1,5 +1,5 @@
 package main
 
-func runFilter() {
+func runFilter(args []string) {
 
 }

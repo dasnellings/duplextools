@@ -12,7 +12,7 @@ const gonomicsVersion string = "1.0.1"
 
 type subcommand struct {
 	name     string
-	function func()
+	function func(args []string)
 	blurb    string
 }
 
@@ -45,8 +45,8 @@ func usage() {
 }
 
 // commandMap builds a map of possible subcommands keyed on the name of the subcommand
-func commandMap() map[string]func() {
-	m := make(map[string]func())
+func commandMap() map[string]func(args []string) {
+	m := make(map[string]func(args []string))
 	for i := range SubCommands {
 		m[SubCommands[i].name] = SubCommands[i].function
 	}
@@ -66,6 +66,6 @@ func main() {
 		return
 	}
 
-	// if command successfully found, execute
-	command()
+	// if command successfully found, pass in remaining arguments and execute
+	command(flag.Args()[1:])
 }

@@ -1,5 +1,5 @@
 package main
 
-func runCall() {
+func runCall(args []string) {
 
 }
