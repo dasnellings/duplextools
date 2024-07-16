@@ -8,7 +8,7 @@ import (
 )
 
 const version string = "0.0.1"
-const gonomicsVersion string = "1.0.1"
+const gonomicsVersion string = "1.0.1-0.20240426183757-e6c6ab634c20"
 
 type subcommand struct {
 	name     string
@@ -30,7 +30,7 @@ func usage() {
 	s := new(strings.Builder)
 	s.WriteString(
 		"Program: duplextools (Tools for duplex sequencing data)\n" +
-			"Version: " + version + "\n" +
+			"Version: " + version + " (gonomics " + gonomicsVersion + ")\n" +
 			"Contact: Daniel Snellings <daniel.snellings@childrens.harvard.edu>\n" +
 			"\nUsage:\tduplextools <command> [options]\n\n" +
 			"Commands:\n")
