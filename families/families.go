@@ -77,58 +77,9 @@ func annotate(in <-chan sam.Sam, out chan<- sam.Sam, startTolerance int, posMatc
 		// add strand tag
 		addStrandTag(&r, bf == currFam.watsonStrandId)
 
-		familyDetermination, pairMatched = readNameMap[r.QName]
-		switch {
-		case pairMatched:
-			addFamilyTag(&r, familyDetermination)
-			delete(readNameMap, r.QName)
+		familyDetermination = findFamily(&r, readNameMap, startTolerance, posMatching, strictPosMatching, currFam, prevFam, &currFamilyId)
+		addFamilyTag(&r, familyDetermination)
 
-		// check match for current family
-		case posMatching && r.RName == currFam.chr && (r.GetChromStart() == currFam.start || r.GetChromEnd() == currFam.end || int(r.PNext)-1 == currFam.start || r.GetChromStart() == currFam.mateStart) && (!strictPosMatching || (strictPosMatching && matePositionsMatch(r, currFam))): // start/end match, probably part of existing family
-			addFamilyTag(&r, currFam.familyId)
-			familyDetermination = currFam.familyId
-			if int(r.PNext)-1 != currFam.mateStart {
-				currFam.altMateStarts = append(currFam.altMateStarts, int(r.PNext)-1)
-			}
-
-		// check match for previous family
-		case posMatching && r.RName == prevFam.chr && (r.GetChromStart() == prevFam.start || r.GetChromEnd() == prevFam.end || int(r.PNext)-1 == prevFam.start || r.GetChromStart() == prevFam.mateStart) && (!strictPosMatching || (strictPosMatching && matePositionsMatch(r, prevFam))): // start/end match, probably part of existing family
-			addFamilyTag(&r, prevFam.familyId)
-			familyDetermination = prevFam.familyId
-			if int(r.PNext)-1 != prevFam.mateStart {
-				prevFam.altMateStarts = append(prevFam.altMateStarts, int(r.PNext)-1)
-			}
-
-		// check altStarts match for current family
-		case posMatching && r.RName == currFam.chr && altStartsMatch(r.GetChromStart(), currFam.altMateStarts) && (!strictPosMatching || (strictPosMatching && matePositionsMatch(r, currFam))):
-			addFamilyTag(&r, currFam.familyId)
-			familyDetermination = currFam.familyId
-
-		// check altStarts match for previous family
-		case posMatching && r.RName == prevFam.chr && altStartsMatch(r.GetChromStart(), prevFam.altMateStarts) && (!strictPosMatching || (strictPosMatching && matePositionsMatch(r, prevFam))):
-			addFamilyTag(&r, prevFam.familyId)
-			familyDetermination = prevFam.familyId
-
-		// barcode match, part of existing family
-		case r.RName == currFam.chr && r.GetChromStart() <= currFam.start+startTolerance && (!strictPosMatching || (strictPosMatching && matePositionsMatch(r, currFam))):
-			addFamilyTag(&r, currFam.familyId)
-			familyDetermination = currFam.familyId
-
-		default: // must overwrite existing family
-			currFamilyId++
-			prevFam, currFam = currFam, prevFam
-			currFam.chr = r.RName
-			currFam.start = r.GetChromStart()
-			currFam.mateStart = int(r.PNext) - 1
-			currFam.altMateStarts = currFam.altMateStarts[:0] // trim
-			currFam.end = r.GetChromEnd()
-			currFam.familyId = currFamilyId
-			addFamilyTag(&r, currFam.familyId)
-			familyDetermination = currFam.familyId
-		}
-
-		//log.Println(!pairMatched, r.RNext, r.RName, r.PNext, r.Pos)
-		//log.Println(!pairMatched && (r.RNext == r.RName || r.RNext == "=") && r.PNext < r.Pos+5000 && r.PNext > r.Pos-5000)
 		if !pairMatched && (r.RNext == r.RName || r.RNext == "=") && r.PNext < r.Pos+5000 && r.PNext > r.Pos-5000 { // only track read names if pair is within 5kb to avoid map getting too large
 			readNameMap[r.QName] = familyDetermination
 			if r.PNext > lastPairStart || r.RName != lastPairChr {
@@ -146,6 +97,64 @@ func annotate(in <-chan sam.Sam, out chan<- sam.Sam, startTolerance int, posMatc
 	close(out)
 }
 
+func findFamily(r *sam.Sam, readNameMap map[string]uint, startTolerance int, posMatching, strictPosMatching bool, currFam, prevFam *family, currFamilyId *uint) uint {
+	// gather booleans used for switch-case below
+	familyDetermination, pairMatched := readNameMap[r.QName]
+
+	// check if mate is already assigned to a family
+	if pairMatched {
+		delete(readNameMap, r.QName)
+		return familyDetermination
+	}
+
+	// TODO: SIMPLIFY THIS LOGIC
+
+	switch {
+	// check match for current family
+	case posMatching && r.RName == currFam.chr && (r.GetChromStart() == currFam.start || r.GetChromEnd() == currFam.end || int(r.PNext)-1 == currFam.start || r.GetChromStart() == currFam.mateStart) && (!strictPosMatching || (strictPosMatching && matePositionsMatch(r, currFam))): // start/end match, probably part of existing family
+		familyDetermination = currFam.familyId
+		if int(r.PNext)-1 != currFam.mateStart {
+			currFam.altMateStarts = append(currFam.altMateStarts, int(r.PNext)-1)
+		}
+
+	// check match for previous family
+	case posMatching && r.RName == prevFam.chr && (r.GetChromStart() == prevFam.start || r.GetChromEnd() == prevFam.end || int(r.PNext)-1 == prevFam.start || r.GetChromStart() == prevFam.mateStart) && (!strictPosMatching || (strictPosMatching && matePositionsMatch(r, prevFam))): // start/end match, probably part of existing family
+		familyDetermination = prevFam.familyId
+		if int(r.PNext)-1 != prevFam.mateStart {
+			prevFam.altMateStarts = append(prevFam.altMateStarts, int(r.PNext)-1)
+		}
+
+	// check altStarts match for current family
+	case posMatching && r.RName == currFam.chr && altStartsMatch(r.GetChromStart(), currFam.altMateStarts) && (!strictPosMatching || (strictPosMatching && matePositionsMatch(r, currFam))):
+		familyDetermination = currFam.familyId
+
+	// check altStarts match for previous family
+	case posMatching && r.RName == prevFam.chr && altStartsMatch(r.GetChromStart(), prevFam.altMateStarts) && (!strictPosMatching || (strictPosMatching && matePositionsMatch(r, prevFam))):
+		familyDetermination = prevFam.familyId
+
+	// barcode match, part of current family
+	case r.RName == currFam.chr && r.GetChromStart() <= currFam.start+startTolerance && (!strictPosMatching || (strictPosMatching && matePositionsMatch(r, currFam))):
+		familyDetermination = currFam.familyId
+
+	// barcode match, part of previous family
+	case r.RName == prevFam.chr && r.GetChromStart() <= prevFam.start+startTolerance && (!strictPosMatching || (strictPosMatching && matePositionsMatch(r, prevFam))):
+		familyDetermination = prevFam.familyId
+
+	default: // must overwrite existing family
+		*currFamilyId++
+		prevFam, currFam = currFam, prevFam
+		currFam.chr = r.RName
+		currFam.start = r.GetChromStart()
+		currFam.mateStart = int(r.PNext) - 1
+		currFam.altMateStarts = currFam.altMateStarts[:0] // trim
+		currFam.end = r.GetChromEnd()
+		currFam.familyId = *currFamilyId
+		familyDetermination = currFam.familyId
+	}
+
+	return familyDetermination
+}
+
 func altStartsMatch(start int, altStarts []int) bool {
 	for i := range altStarts {
 		if start == altStarts[i] {
@@ -155,7 +164,7 @@ func altStartsMatch(start int, altStarts []int) bool {
 	return false
 }
 
-func matePositionsMatch(r sam.Sam, fam *family) bool {
+func matePositionsMatch(r *sam.Sam, fam *family) bool {
 	switch {
 	case r.GetChromStart() == fam.start && int(r.PNext)-1 == fam.mateStart:
 		return true
