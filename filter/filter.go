@@ -1,8 +1,6 @@
-package main
+package filter
 
 import (
-	"flag"
-	"fmt"
 	"github.com/vertgenlab/gonomics/bed"
 	"github.com/vertgenlab/gonomics/chromInfo"
 	"github.com/vertgenlab/gonomics/dna"
@@ -16,45 +14,11 @@ import (
 	"sort"
 )
 
-func usage() {
-	fmt.Print(
-		"filterGermline - Filter germline variants from a vcf based on data from bulk sequencing.\n" +
-			"Usage:\n" +
-			"filterGermline [options] -i input.vcf -b bulkGenomic.bam > output.vcf\n\n")
-	flag.PrintDefaults()
-}
-
-func main() {
-	input := flag.String("i", "", "Input VCF file with variant calls.")
-	//ref := flag.String("r", "", "Reference FASTA file. Must be indexed (.fai).")
-	genomicVcf := flag.String("g", "", "VCF file with germline variants from bulk sequencing.")
-	genomicBam := flag.String("b", "", "BAM file from bulk tissue. Must be indexed (.bai).")
-	snpVcf := flag.String("e", "", "VCF file with sites with known SNPs to exclude from analysis.")
-	minCoverage := flag.Int("minCoverage", 10, "Minimum coverage in bulk bam for consideration in output.")
-	maxReadFrac := flag.Float64("maxReadFrac", 0.1, "Maximum fraction of reads (minimum 1) in bulk sample for variant to be considered for output.")
-	maxReads := flag.Int("maxReads", 100000, "Maximum number of reads with alternate allele present in bulk sample to escape filtering (e.g. set to 1 to exclude all variants with >1 read with alternate allele in bulk sample")
-	minBaseQuality := flag.Int("minBaseQuality", 0, "Minimum base quality to be considered for calling. Bases below threshold will be ignored.")
-	output := flag.String("o", "stdout", "Output VCF file.")
-	flag.Parse()
-
-	if *genomicVcf == "" {
-		log.Println("WARNING: use of -g is STRONGLY RECOMMENDED if you are analyzing indels. It is useful, but not critical for analysing SNVs.")
-	}
-
-	if *input == "" || *genomicBam == "" {
-		usage()
-		log.Fatalln("ERROR: must have inputs for -i, and -b")
-	}
-
-	handleInputs(*input, *output, *genomicBam, *genomicVcf, *snpVcf, *minCoverage, *maxReadFrac, *maxReads, *minBaseQuality)
-}
-
-func handleInputs(input, output, genomicBam, genomicVcf, snpVcf string, minCoverage int, maxReadFrac float64, maxReads int, minBaseQuality int) {
+func Filter(input, output, genomicBam, genomicVcf, snpVcf string, minCoverage int, maxReadFrac float64, maxReads int, minBaseQuality int) {
 	var err error
 	out := fileio.EasyCreate(output)
 	inChan, header := vcf.GoReadToChan(input)
 	vcf.NewWriteHeader(out, header)
-	//ref := fasta.NewSeeker(reference, "")
 	gBam, gBamHeader := sam.OpenBam(genomicBam)
 	gBai := sam.ReadBai(genomicBam + ".bai")
 
@@ -87,8 +51,6 @@ func handleInputs(input, output, genomicBam, genomicVcf, snpVcf string, minCover
 
 	filterGermline(inChan, out, gBam, gBamHeader, gBai, tree, minCoverage, maxReadFrac, maxReads, minBaseQuality)
 
-	//err = ref.Close()
-	//exception.PanicOnErr(err)
 	err = gBam.Close()
 	exception.PanicOnErr(err)
 	err = out.Close()
@@ -176,7 +138,7 @@ func retrievePile(v vcf.Vcf, gBam *sam.BamReader, gBai sam.Bai, gBamHeader sam.H
 		maskLowQualityBases(&reads[i], minBaseQuality)
 	}
 	sort.Slice(reads, func(i, j int) bool { return reads[i].Pos < reads[j].Pos })
-	piles := pileup(reads, gBamHeader)
+	piles := filterPileup(reads, gBamHeader)
 	for i := range piles {
 		if int(piles[i].Pos) == pos {
 			return piles[i], reads
@@ -185,7 +147,7 @@ func retrievePile(v vcf.Vcf, gBam *sam.BamReader, gBai sam.Bai, gBamHeader sam.H
 	return sam.Pile{}, reads
 }
 
-func pileup(reads []sam.Sam, header sam.Header) []sam.Pile {
+func filterPileup(reads []sam.Sam, header sam.Header) []sam.Pile {
 	if len(reads) == 0 {
 		return nil
 	}
@@ -227,6 +189,15 @@ func sumDel(p sam.Pile) int {
 	return ans
 }
 
+func checkChr(chr string, list []chromInfo.ChromInfo) bool {
+	for i := range list {
+		if list[i].Name == chr {
+			return true
+		}
+	}
+	return false
+}
+
 func maskLowQualityBases(s *sam.Sam, minQual int) {
 	var currQual uint8
 	for i := range s.Qual {
@@ -235,13 +206,4 @@ func maskLowQualityBases(s *sam.Sam, minQual int) {
 			s.Seq[i] = dna.N
 		}
 	}
-}
-
-func checkChr(chr string, list []chromInfo.ChromInfo) bool {
-	for i := range list {
-		if list[i].Name == chr {
-			return true
-		}
-	}
-	return false
 }
