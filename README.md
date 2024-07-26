@@ -27,4 +27,4 @@ The included tools are designed to be flexible for use with any duplex sequencin
 2) the user can provide a fastq containing the duplex barcodes
 
 duplextools has been tested (and has presets) for the following methods
-* META-CS
+* [META-CS](https://pubmed.ncbi.nlm.nih.gov/33593904/)
