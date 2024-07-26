@@ -10,7 +10,7 @@ duplextools is a collection of tools for processing and analyzing data generated
 
 duplextools can be used to:
 1) Extract and trim duplex barcodes from fastq files
-2) Pair reads by DNA molecule of origin (a read family)
+2) Pair reads by molecule of origin (a read family)
 3) Call variants from read families
 4) Filter variant calls
 5) Compute genome-wide mutation burden
