@@ -30,7 +30,7 @@ var SubCommands = []*subcommand{
 func usage() {
 	s := new(strings.Builder)
 	s.WriteString(
-		"Program: duplextools (Tools for duplex sequencing data)\n" +
+		"Program: duplextools (tools for duplex sequencing data)\n" +
 			"Version: " + version + " (gonomics " + gonomicsVersion + ")\n" +
 			"Contact: Daniel Snellings <daniel.snellings@childrens.harvard.edu>\n" +
 			"\nUsage:\tduplextools <command> [options]\n\n" +

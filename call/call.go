@@ -312,14 +312,14 @@ func callFromPilePair(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 	crickVarType, maxCrickBase, crickInsSeq, crickDelLen, crickAltAlleleCount, crickInsAlleleCount = maxBase(cPile)
 
 	// special case to bias towards insertions since they are assigned to the position before the insertion
-	if float64(watsonInsAlleleCount)/float64(watsonDepth) > minAf || float64(crickInsAlleleCount)/float64(crickDepth) > minAf {
+	if float64(watsonInsAlleleCount)/watsonDepth > minAf || float64(crickInsAlleleCount)/crickDepth > minAf {
 		watsonVarType = insertion
 		crickVarType = insertion
 		watsonAltAlleleCount = watsonInsAlleleCount
 		crickAltAlleleCount = crickInsAlleleCount
 		if debugOutChan != nil {
 			debugOutChan <- fmt.Sprintf("triggered insertion bias")
-			debugOutChan <- fmt.Sprintf("WatsonAC:%d, WatsonDP:%d, CrickAC:%d, CrickDP:%d", watsonAltAlleleCount, watsonDepth, crickAltAlleleCount, crickDepth)
+			debugOutChan <- fmt.Sprintf("WatsonAC:%d, WatsonDP:%f, CrickAC:%d, CrickDP:%f", watsonAltAlleleCount, watsonDepth, crickAltAlleleCount, crickDepth)
 		}
 	}
 
@@ -447,7 +447,7 @@ func unstrandedCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, minSt
 	// exclude if watson or crick AF is less than threshold.
 	if float64(mergeAltAlleleCount)/float64(mergeDepth) < minAf {
 		if debugOutChan != nil {
-			debugOutChan <- fmt.Sprintf("does not meet af requirements\nmerge: (%d/%d) = %f\n", mergeAltAlleleCount, mergeDepth, float64(mergeAltAlleleCount)/float64(mergeDepth))
+			debugOutChan <- fmt.Sprintf("does not meet af requirements\nmerge: (%d/%f) = %f\n", mergeAltAlleleCount, mergeDepth, float64(mergeAltAlleleCount)/mergeDepth)
 		}
 		return ans, false, true
 	}
@@ -495,7 +495,7 @@ func singleStrandCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 	// exclude if watson or crick AF is less than threshold.
 	if float64(watsonAltAlleleCount)/float64(watsonDepth) < 1 && float64(crickAltAlleleCount)/float64(crickDepth) < 1 {
 		if debugOutChan != nil {
-			debugOutChan <- fmt.Sprintf("does not meet single-stranded af requirements\nwatson: (%d/%d) = %f\ncrick: (%d/%d) = %f", watsonAltAlleleCount, watsonDepth, float64(watsonAltAlleleCount)/float64(watsonDepth), crickAltAlleleCount, crickDepth, float64(crickAltAlleleCount)/float64(crickDepth))
+			debugOutChan <- fmt.Sprintf("does not meet single-stranded af requirements\nwatson: (%d/%f) = %f\ncrick: (%d/%f) = %f", watsonAltAlleleCount, watsonDepth, float64(watsonAltAlleleCount)/watsonDepth, crickAltAlleleCount, crickDepth, float64(crickAltAlleleCount)/crickDepth)
 		}
 		return ans, false, true
 	}
@@ -792,7 +792,7 @@ func (s strandType) String() string {
 	case unStranded:
 		return "US"
 	default:
-		log.Panicln("Unrecognized strand type: ", s)
+		log.Panicln("Unrecognized strand type: ", string(s))
 		return ""
 	}
 }
