@@ -26,5 +26,5 @@ The included tools are designed to be flexible for use with any duplex sequencin
 1) uses duplex barcodes inline with read1 and read2
 2) the user can provide a fastq containing the duplex barcodes
 
-duplextools has been tested (and has presets) for the following methods
-* [META-CS](https://pubmed.ncbi.nlm.nih.gov/33593904/)
+[//]: # "duplextools has been tested (and has presets) for the following methods"
+[//]: # "* [META-CS](https://pubmed.ncbi.nlm.nih.gov/33593904/)"
