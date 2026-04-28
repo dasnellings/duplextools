@@ -2,7 +2,7 @@ package extract
 
 import (
 	"fmt"
-	"github.com/dasnellings/duplexTools/barcode"
+	"github.com/dasnellings/duplextools/barcode"
 	"github.com/vertgenlab/gonomics/exception"
 	"github.com/vertgenlab/gonomics/fastq"
 	"github.com/vertgenlab/gonomics/fileio"

@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/dasnellings/duplexTools/pair"
+	"github.com/dasnellings/duplextools/pair"
 	"github.com/vertgenlab/gonomics/exception"
 )
 

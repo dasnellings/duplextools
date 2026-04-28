@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/dasnellings/duplexTools/call"
+	"github.com/dasnellings/duplextools/call"
 	"log"
 	"os"
 	"runtime"
