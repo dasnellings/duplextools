@@ -2,7 +2,7 @@ package families
 
 import (
 	"fmt"
-	"github.com/dasnellings/duplexTools/barcode"
+	"github.com/dasnellings/duplextools/barcode"
 	"github.com/vertgenlab/gonomics/sam"
 	"golang.org/x/exp/maps"
 	"log"

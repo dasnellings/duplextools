@@ -2,8 +2,8 @@ package pair
 
 import (
 	"fmt"
-	"github.com/dasnellings/duplexTools/barcode"
-	"github.com/dasnellings/duplexTools/families"
+	"github.com/dasnellings/duplextools/barcode"
+	"github.com/dasnellings/duplextools/families"
 	"github.com/vertgenlab/gonomics/exception"
 	"github.com/vertgenlab/gonomics/fileio"
 	"github.com/vertgenlab/gonomics/sam"

@@ -2,8 +2,8 @@ package call
 
 import (
 	"fmt"
-	"github.com/dasnellings/duplexTools/barcode"
-	"github.com/dasnellings/duplexTools/fai"
+	"github.com/dasnellings/duplextools/barcode"
+	"github.com/dasnellings/duplextools/fai"
 	"github.com/vertgenlab/gonomics/bed"
 	"github.com/vertgenlab/gonomics/cigar"
 	"github.com/vertgenlab/gonomics/dna"

@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/dasnellings/duplexTools/barcode"
+	"github.com/dasnellings/duplextools/barcode"
 	"github.com/vertgenlab/gonomics/cigar"
 	"github.com/vertgenlab/gonomics/dna"
 	"github.com/vertgenlab/gonomics/exception"

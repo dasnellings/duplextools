@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/dasnellings/duplexTools/filter"
+	"github.com/dasnellings/duplextools/filter"
 	"github.com/vertgenlab/gonomics/exception"
 	"log"
 )

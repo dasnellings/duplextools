@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/dasnellings/duplexTools/burden"
+	"github.com/dasnellings/duplextools/burden"
 	"github.com/vertgenlab/gonomics/exception"
 )
 
