@@ -493,7 +493,7 @@ func singleStrandCall(wPile, cPile sam.Pile, minAf, baseQualPenalty float64, min
 	var chr string
 
 	// exclude if watson or crick AF is less than threshold.
-	if float64(watsonAltAlleleCount)/float64(watsonDepth) < 1 && float64(crickAltAlleleCount)/float64(crickDepth) < 1 {
+	if float64(watsonAltAlleleCount)/float64(watsonDepth) < 1 || float64(crickAltAlleleCount)/float64(crickDepth) < 1 {
 		if debugOutChan != nil {
 			debugOutChan <- fmt.Sprintf("does not meet single-stranded af requirements\nwatson: (%d/%f) = %f\ncrick: (%d/%f) = %f", watsonAltAlleleCount, watsonDepth, float64(watsonAltAlleleCount)/watsonDepth, crickAltAlleleCount, crickDepth, float64(crickAltAlleleCount)/crickDepth)
 		}
