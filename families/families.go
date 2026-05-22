@@ -62,6 +62,8 @@ func annotate(in <-chan sam.Sam, out chan<- sam.Sam, startTolerance int, posMatc
 
 		if currFam == nil {
 			currFam = new(family)
+			currFamilyId++
+			currFam.familyId = currFamilyId
 			currFam.chr = r.GetChrom()
 			currFam.start, currFam.end = getFamilyBoundaries(&r)
 			currFam.mateStart = int(r.PNext) - 1
