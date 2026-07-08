@@ -204,6 +204,12 @@ func addStrandTag(s *sam.Sam, watsonStrand bool) {
 }
 
 func getFamilyBoundaries(s *sam.Sam) (start, end int) {
+	// if it is not paired reads
+	if !sam.IsPaired(*s) {
+		return s.GetChromStart(), s.GetChromEnd()
+	}
+
+	// if it is paired reads
 	if sam.IsPosStrand(*s) {
 		return s.GetChromStart(), s.GetChromStart() + int(s.TLen)
 	} else { // is reverse
