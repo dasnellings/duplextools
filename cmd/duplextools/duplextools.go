@@ -8,7 +8,7 @@ import (
 	"text/tabwriter"
 )
 
-const version string = "0.0.1"
+const version string = "0.0.2"
 const gonomicsVersion string = "1.0.1-0.20240426183757-e6c6ab634c20"
 
 type subcommand struct {
